@@ -12,6 +12,7 @@ export default defineConfig({
       "/health": api,
       "/api": api,
       "/auth": api,
+      "/twitch": api,
     },
   },
 });

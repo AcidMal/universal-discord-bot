@@ -237,3 +237,36 @@ Sends the current case embed to you only. Nothing is saved.
 | `preset` | yes | Midnight, Light, Nord, or Rose |
 
 Example: `/theme preset preset:Nord`
+
+## Twitch
+
+Manage Server is required. Alerts are per server. The same Twitch channel can post into different Discord channels in different servers.
+
+When `PUBLIC_URL` is a public https address, Twitch pushes the alert as soon as the stream starts. Otherwise the bot checks every 10 seconds. The embed uses the server's accent color.
+
+| Part | Content |
+| --- | --- |
+| Title | Stream title, linking to the stream |
+| Channel | Twitch display name, also linking to the stream |
+| Image | Live thumbnail |
+
+### `/twitch add`
+
+| Option | Required | Meaning |
+| --- | --- | --- |
+| `channel` | yes | Discord channel that receives the embed |
+| `user` | yes | Twitch login, `@login`, or a `twitch.tv` link |
+
+Example: `/twitch add channel:#streams user:shroud`
+
+Running it again for the same Twitch login moves the alert to the new Discord channel.
+
+### `/twitch remove`
+
+| Option | Required | Meaning |
+| --- | --- | --- |
+| `user` | yes | Twitch login to stop watching |
+
+### `/twitch list`
+
+Lists each Twitch login and the Discord channel it posts to.

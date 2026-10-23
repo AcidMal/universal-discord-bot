@@ -411,6 +411,44 @@ class Lockdown(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class TwitchAlert(Base):
+    __tablename__ = "twitch_alerts"
+    __table_args__ = (
+        UniqueConstraint("guild_id", "twitch_user_id"),
+        Index("ix_twitch_alerts_twitch_user_id", "twitch_user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = uuidv7_pk()
+    guild_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("guilds.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    discord_channel_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    twitch_login: Mapped[str] = mapped_column(String(25), nullable=False)
+    twitch_user_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class TwitchLiveState(Base):
+    __tablename__ = "twitch_live_state"
+
+    broadcaster_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    live: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TwitchSubscription(Base):
+    __tablename__ = "twitch_subscriptions"
+    __table_args__ = (UniqueConstraint("broadcaster_id", "event_type"),)
+
+    id: Mapped[uuid.UUID] = uuidv7_pk()
+    broadcaster_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    subscription_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+
+
 class ProcessedEvent(Base):
     __tablename__ = "processed_events"
 

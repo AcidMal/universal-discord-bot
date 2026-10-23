@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     session_secret: str = "dev-session-secret-change-me"
     node_id: str = ""
     shard_count: int = 0
+    twitch_client_id: str = ""
+    twitch_client_secret: str = ""
+    twitch_eventsub_secret: str = ""
 
     @field_validator("public_url")
     @classmethod

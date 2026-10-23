@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from api.routes import router
+from api.twitch_routes import router as twitch_router
 from shared.db import get_engine
 from shared.settings import get_settings
 
@@ -18,6 +19,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(router)
+app.include_router(twitch_router)
 
 
 @app.get("/health")

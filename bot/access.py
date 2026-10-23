@@ -31,7 +31,7 @@ def member_can(member: discord.Member, action: str, state: GuildState) -> bool:
         native = perms.kick_members
     elif action in {"ban", "unban"}:
         native = perms.ban_members
-    elif action in {"setup", "theme", "automod"}:
+    elif action in {"setup", "theme", "automod", "twitch"}:
         native = perms.manage_guild
     elif action == "lockdown":
         native = perms.manage_channels or perms.manage_guild

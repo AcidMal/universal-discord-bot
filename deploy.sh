@@ -129,6 +129,8 @@ random_secret() {
 prompt_value DISCORD_TOKEN "Discord bot token" 1
 prompt_value DISCORD_CLIENT_ID "Discord application client ID" 0
 prompt_value DISCORD_CLIENT_SECRET "Discord application client secret" 1
+prompt_value TWITCH_CLIENT_ID "Twitch client ID (optional, Enter to skip)" 0
+prompt_value TWITCH_CLIENT_SECRET "Twitch client secret (optional, Enter to skip)" 1
 
 public_url="$(get_kv PUBLIC_URL)"
 if [[ -z "$public_url" ]]; then
@@ -142,6 +144,10 @@ fi
 
 if [[ -z "$(get_kv SESSION_SECRET)" ]]; then
   set_kv SESSION_SECRET "$(random_secret)"
+fi
+
+if [[ -z "$(get_kv TWITCH_EVENTSUB_SECRET)" ]]; then
+  set_kv TWITCH_EVENTSUB_SECRET "$(random_secret)"
 fi
 
 if [[ -z "$(get_kv SHARD_COUNT)" ]]; then
