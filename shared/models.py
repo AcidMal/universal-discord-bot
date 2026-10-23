@@ -15,7 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    text,
+    text as sql_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -37,7 +37,7 @@ def uuidv7_pk() -> Mapped[uuid.UUID]:
     return mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        server_default=text("uuidv7()"),
+        server_default=sql_text("uuidv7()"),
     )
 
 
