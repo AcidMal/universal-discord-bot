@@ -184,9 +184,14 @@ async def logout() -> Response:
 
 
 @router.get("/api/me")
-async def me(request: Request) -> dict[str, str]:
+async def me(request: Request) -> dict[str, str | bool]:
     session_data = read_session(request)
-    return {"id": str(session_data["user_id"]), "username": str(session_data.get("username") or "")}
+    user_id = str(session_data["user_id"])
+    return {
+        "id": user_id,
+        "username": str(session_data.get("username") or ""),
+        "is_admin": user_id in get_settings().admin_id_set(),
+    }
 
 
 @router.get("/api/guilds")

@@ -58,8 +58,45 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+export type ShardStatus = {
+  shard_id: number;
+  status: string;
+  latency_ms: number | null;
+  lease_valid: boolean;
+};
+
+export type NodeStatus = {
+  node_id: string;
+  hostname: string;
+  role: string;
+  status: string;
+  age_seconds: number;
+  shards: ShardStatus[];
+};
+
+export type ClusterStatus = {
+  summary: {
+    nodes_online: number;
+    nodes_total: number;
+    shards_ready: number;
+    shards_total: number;
+  };
+  nodes: NodeStatus[];
+  unassigned_shards: ShardStatus[];
+};
+
+export type BotSettings = {
+  presence: string;
+  activity_type: string;
+  status_text: string;
+};
+
 export const api = {
-  me: () => request<{ id: string; username: string }>("/api/me"),
+  me: () => request<{ id: string; username: string; is_admin: boolean }>("/api/me"),
+  status: () => request<ClusterStatus>("/api/status"),
+  botSettings: () => request<BotSettings>("/api/admin/bot"),
+  saveBotSettings: (body: BotSettings) =>
+    request<BotSettings>("/api/admin/bot", { method: "PUT", body: JSON.stringify(body) }),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   guilds: () => request<GuildSummary[]>("/api/guilds"),
   guild: (id: string) => request<GuildDetail>(`/api/guilds/${id}`),

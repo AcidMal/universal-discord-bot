@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api, applyTokens, GuildDetail, GuildSummary, ThemePayload } from "./api";
+import { BotSettingsPanel, HealthPanel } from "./Status";
 
 const TABS = ["Overview", "Cases", "Reports", "Notes", "Automod", "Staff", "Theme"] as const;
 const PRESETS = ["midnight", "light", "nord", "rose", "custom"] as const;
@@ -25,8 +26,12 @@ function EmbedPreview({ theme }: { theme: ThemePayload }) {
   );
 }
 
+type View = "status" | "servers" | "bot";
+
 export default function App() {
   const [username, setUsername] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [view, setView] = useState<View>("status");
   const [guilds, setGuilds] = useState<GuildSummary[]>([]);
   const [guildId, setGuildId] = useState<string>("");
   const [detail, setDetail] = useState<GuildDetail | null>(null);
@@ -39,6 +44,7 @@ export default function App() {
       .me()
       .then(async (user) => {
         setUsername(user.username);
+        setIsAdmin(user.is_admin);
         const rows = await api.guilds();
         setGuilds(rows);
         if (rows[0]) setGuildId(rows[0].id);
@@ -60,56 +66,76 @@ export default function App() {
       .catch((err: Error) => setError(err.message));
   }, [guildId]);
 
-  if (!username) {
-    return (
-      <main className="login">
-        <section className="card">
-          <p className="eyebrow">Moderation</p>
-          <h1>A clean desk for staff.</h1>
-          <p>Sign in with Discord to configure the servers where you can manage this bot.</p>
-          <a className="button" href="/auth/login">
-            Sign in with Discord
-          </a>
-          {error ? <p className="error">{error}</p> : null}
-        </section>
-      </main>
-    );
-  }
+  const showServers = username && view === "servers";
 
   return (
     <div className="shell">
       <header>
         <div>
           <p className="eyebrow">Moderation</p>
-          <strong>{detail?.name || "Select a server"}</strong>
+          <strong>
+            {view === "status" ? "Live status" : view === "bot" ? "Bot settings" : detail?.name || "Select a server"}
+          </strong>
         </div>
         <div className="header-actions">
-          <span>{username}</span>
-          <button
-            className="ghost"
-            onClick={() => api.logout().then(() => window.location.assign("/"))}
-          >
-            Sign out
-          </button>
+          {username ? (
+            <>
+              <span>{username}</span>
+              <button
+                className="ghost"
+                onClick={() => api.logout().then(() => window.location.assign("/"))}
+              >
+                Sign out
+              </button>
+            </>
+          ) : (
+            <a className="button" href="/auth/login">
+              Sign in
+            </a>
+          )}
         </div>
       </header>
       <div className="layout">
         <aside>
-          {guilds.length === 0 ? <p>No servers yet. Invite the bot, then refresh.</p> : null}
-          {guilds.map((guild) => (
-            <button
-              key={guild.id}
-              className={guild.id === guildId ? "nav active" : "nav"}
-              onClick={() => setGuildId(guild.id)}
-            >
-              <span>{guild.name}</span>
-              <small>{guild.access}</small>
+          <button className={view === "status" ? "nav active" : "nav"} onClick={() => setView("status")}>
+            <span>Status</span>
+            <small>public</small>
+          </button>
+          {isAdmin ? (
+            <button className={view === "bot" ? "nav active" : "nav"} onClick={() => setView("bot")}>
+              <span>Bot</span>
+              <small>admin</small>
             </button>
-          ))}
+          ) : null}
+          {username ? (
+            guilds.length === 0 ? (
+              <p>No servers yet. Invite the bot, then refresh.</p>
+            ) : (
+              guilds.map((guild) => (
+                <button
+                  key={guild.id}
+                  className={showServers && guild.id === guildId ? "nav active" : "nav"}
+                  onClick={() => {
+                    setGuildId(guild.id);
+                    setView("servers");
+                  }}
+                >
+                  <span>{guild.name}</span>
+                  <small>{guild.access}</small>
+                </button>
+              ))
+            )
+          ) : (
+            <p>Sign in with Discord to edit server settings.</p>
+          )}
         </aside>
         <main>
           {error ? <p className="error">{error}</p> : null}
           {notice ? <p className="notice">{notice}</p> : null}
+          {view === "status" ? <HealthPanel /> : null}
+          {view === "bot" && isAdmin ? <BotSettingsPanel onSaved={setNotice} /> : null}
+          {showServers ? (
+            <>
           <nav className="tabs">
             {TABS.map((item) => (
               <button key={item} className={item === tab ? "tab active" : "tab"} onClick={() => setTab(item)}>
@@ -144,6 +170,8 @@ export default function App() {
               }}
               onError={setError}
             />
+          ) : null}
+            </>
           ) : null}
         </main>
       </div>

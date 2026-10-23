@@ -174,7 +174,11 @@ async def release_leases(node_id: str) -> None:
             text(
                 """
                 UPDATE shard_leases
-                SET node_id = NULL, leased_until = now()
+                SET node_id = NULL,
+                    leased_until = now(),
+                    gateway_status = 'offline',
+                    latency_ms = NULL,
+                    gateway_updated_at = now()
                 WHERE node_id = :node
                 """
             ),
@@ -192,6 +196,29 @@ async def release_leases(node_id: str) -> None:
         )
         await session.commit()
         log.info("released shard leases for %s", node_id)
+
+
+async def report_shard_gateway(node_id: str, shard_id: int, status: str, latency_ms: int | None) -> None:
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(
+            text(
+                """
+                UPDATE shard_leases
+                SET gateway_status = :status,
+                    latency_ms = :latency_ms,
+                    gateway_updated_at = now()
+                WHERE shard_id = :shard_id AND node_id = :node
+                """
+            ),
+            {
+                "status": status,
+                "latency_ms": latency_ms,
+                "shard_id": shard_id,
+                "node": node_id,
+            },
+        )
+        await session.commit()
 
 
 async def heartbeat_loop(node_id: str, shard_ids: list[int]) -> None:
@@ -217,12 +244,18 @@ async def listen_forever() -> None:
         try:
             conn = await asyncpg.connect(dsn)
 
-            def _on_notify(_conn, _pid, _channel, payload: str) -> None:
+            def _on_notify(_conn, _pid, channel: str, payload: str) -> None:
+                if channel == "bot_settings":
+                    from bot.presence import schedule_apply
+
+                    schedule_apply()
+                    return
                 guild_id = int(payload) if payload else None
                 get_cache().invalidate(guild_id)
                 log.info("invalidated guild cache %s", payload or "*")
 
             await conn.add_listener("guild_invalidate", _on_notify)
+            await conn.add_listener("bot_settings", _on_notify)
             while not conn.is_closed():
                 await asyncio.sleep(5)
         except asyncio.CancelledError:

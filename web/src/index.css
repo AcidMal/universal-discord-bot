@@ -203,6 +203,65 @@ h1 {
   color: var(--accent);
 }
 
+h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0.2rem 0 0.4rem;
+}
+
+.summary,
+.shard-meta {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.shards {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.shards li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.75rem;
+  text-transform: lowercase;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.pill.online,
+.pill.ready {
+  color: #86efac;
+}
+
+.pill.stale,
+.pill.connecting {
+  color: #fcd34d;
+}
+
+.pill.offline,
+.pill.disconnected,
+.pill.expired,
+.pill.open,
+.pill.unknown {
+  opacity: 0.7;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

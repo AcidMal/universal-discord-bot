@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     twitch_client_id: str = ""
     twitch_client_secret: str = ""
     twitch_eventsub_secret: str = ""
+    bot_admin_ids: str = ""
+
+    def admin_id_set(self) -> set[str]:
+        return {part.strip() for part in self.bot_admin_ids.split(",") if part.strip()}
 
     @field_validator("public_url")
     @classmethod

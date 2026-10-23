@@ -56,6 +56,7 @@ class ClusterNode(Base):
         nullable=False,
         server_default=text("'[]'::jsonb"),
     )
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="gateway")
 
     leases: Mapped[list[ShardLease]] = relationship(back_populates="node")
 
@@ -70,8 +71,25 @@ class ShardLease(Base):
         nullable=True,
     )
     leased_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    gateway_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gateway_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     node: Mapped[ClusterNode | None] = relationship(back_populates="leases")
+
+
+class BotProfile(Base):
+    __tablename__ = "bot_profile"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    presence: Mapped[str] = mapped_column(String(16), nullable=False, default="online")
+    activity_type: Mapped[str] = mapped_column(String(16), nullable=False, default="custom")
+    status_text: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+    )
 
 
 class Guild(Base):
