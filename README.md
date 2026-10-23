@@ -126,64 +126,43 @@ docker compose down
 
 ## Deploy on Kubernetes
 
-The manifests in `deploy/kubernetes` run the same four pieces as Compose: Postgres 18.1, the API (migrations before it serves), the dashboard, and one or more gateway pods. Shard leases stay in Postgres, so the pods do not need Redis.
+Point `kubectl` at the cluster, then run one script. It reads the Discord settings already in `.env`, asks for the public dashboard URL once, and saves that answer in `deploy/kubernetes/cluster.env`.
 
-Compose and the manifests use the same GitHub Container Registry tags. A local name such as `universal-discord-bot-api:latest` cannot be pushed, and the cluster would look for it on Docker Hub.
-
-| Service | Image |
-| --- | --- |
-| API | `ghcr.io/acidmal/universal-discord-bot-api:latest` |
-| Bot | `ghcr.io/acidmal/universal-discord-bot-bot:latest` |
-| Web | `ghcr.io/acidmal/universal-discord-bot-web:latest` |
-
-Log in with a GitHub personal access token that has `write:packages`, then build and push. Postgres stays on `postgres:18.1` and is not part of this push.
+macOS, Linux, WSL, or Git Bash:
 
 ```bash
-echo "$GHCR_TOKEN" | docker login ghcr.io -u acidmal --password-stdin
-docker compose build api bot web
-docker compose push api bot web
+chmod +x deploy-k8s.sh
+./deploy-k8s.sh
 ```
 
-The cluster pulls those tags on each start. New GHCR packages are private, so create a pull secret in the namespace before the pods start:
+Windows PowerShell:
+
+```powershell
+.\deploy-k8s.ps1
+```
+
+The script shows the current kubectl context before it changes anything. It creates the namespace, the database password, the app Secret, and the Ingress host from that URL. `/api`, `/auth`, `/health`, and `/twitch` go to the API. Everything else goes to the dashboard. Postgres 18.1 stays inside the cluster on a 5Gi volume, and the same password is reused on the next run.
+
+Docker Desktop, kind, minikube, and k3d build the images straight into that cluster. Any other context is treated as a remote cluster: the script builds the three app images, pushes them to `ghcr.io/acidmal`, and creates a pull secret. The GitHub token needs `write:packages` and `read:packages`. It is saved in `cluster.env` and is not committed.
 
 ```bash
-kubectl apply -f deploy/kubernetes/namespace.yaml
-kubectl create secret docker-registry ghcr \
-  --namespace universal-discord-bot \
-  --docker-server=ghcr.io \
-  --docker-username=acidmal \
-  --docker-password="$GHCR_TOKEN"
+./deploy-k8s.sh --replicas 2
+./deploy-k8s.sh --no-build
+./deploy-k8s.sh --local
+./deploy-k8s.sh --remote
+./deploy-k8s.sh --noninteractive
 ```
 
-Create the app secret from the example, then set the public values. The pull secret above only lets the cluster download images. `POSTGRES_PASSWORD` and the password inside `DATABASE_URL` must match. `PUBLIC_URL` must be the Ingress host, with `https://` and no trailing slash.
+`--replicas` is only useful once Discord assigns more than one shard. `--no-build` reuses images that are already built or pushed. `--local` and `--remote` override the context guess. `--noninteractive` reads `.env` and `cluster.env` and does not prompt.
+
+When it finishes, save the printed OAuth redirect in the Discord application. The dashboard URL has to be the hostname that reaches the Ingress, with `https://` when Twitch instant alerts are on.
 
 ```bash
-cp deploy/kubernetes/secret.example.yaml deploy/kubernetes/secret.yaml
-kubectl apply -f deploy/kubernetes/namespace.yaml
-kubectl apply -f deploy/kubernetes/secret.yaml
+kubectl logs -n universal-discord-bot -l app=bot -f
+kubectl logs -n universal-discord-bot -l app=api -f
 ```
 
-Edit `deploy/kubernetes/configmap.yaml` (`PUBLIC_URL`, `DISCORD_CLIENT_ID`, `BOT_ADMIN_IDS`, `SHARD_COUNT`, `TWITCH_CLIENT_ID`) and the host in `deploy/kubernetes/ingress.yaml`. The Ingress sends `/api`, `/auth`, `/health`, and `/twitch` to the API and everything else to the dashboard. Put the same host in the Discord OAuth redirect as `{PUBLIC_URL}/auth/callback`. Twitch EventSub uses `{PUBLIC_URL}/twitch/eventsub`, so the Ingress host needs a public HTTPS certificate. Add a `tls` block on the Ingress when you have one.
-
-```bash
-kubectl apply -k deploy/kubernetes
-kubectl rollout status deployment/api -n universal-discord-bot
-kubectl rollout status deployment/bot -n universal-discord-bot
-```
-
-Each gateway pod sets `NODE_ID` to its own pod name, so replicas do not share a lease. Leave the bot at one replica until Discord assigns more than one shard, then:
-
-```bash
-kubectl scale deployment/bot -n universal-discord-bot --replicas=2
-```
-
-The API entrypoint waits until Postgres accepts connections, runs `alembic upgrade head`, then serves `/health`. Gateway pods wait for that health check before they log in. Postgres stores its data on a 5Gi volume mounted at `/var/lib/postgresql`, which is the path the Postgres 18 image expects. After you change the ConfigMap or Secret, restart the API and the bot so they pick up the new values:
-
-```bash
-kubectl rollout restart deployment/api deployment/bot -n universal-discord-bot
-```
-
-To use a database you already run, delete `postgres.yaml` from `deploy/kubernetes/kustomization.yaml` and point `DATABASE_URL` at that server.
+Run `./deploy-k8s.sh` again after changing `.env` or `cluster.env`. To use a Postgres server you already run, set `DATABASE_URL` in `cluster.env` and the script will skip the in-cluster database.
 
 ## Configuration
 
@@ -321,7 +300,8 @@ The scheduler is safe to run on every connected node. `scheduled_actions` rows a
 | `web/` | Vite + React dashboard |
 | `migrations/` | Alembic |
 | `deploy.sh`, `deploy.ps1` | One-command Docker deploy |
-| `deploy/kubernetes/` | Kubernetes manifests for the same stack |
+| `deploy-k8s.sh`, `deploy-k8s.ps1` | One-command Kubernetes deploy |
+| `deploy/kubernetes/` | Kubernetes manifests used by that script |
 | `COMMANDS.md` | Slash command reference |
 
 ## Tests

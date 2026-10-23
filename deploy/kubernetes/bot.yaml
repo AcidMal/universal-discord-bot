@@ -14,12 +14,10 @@ spec:
       labels:
         app: bot
     spec:
-      imagePullSecrets:
-        - name: ghcr
       initContainers:
         - name: wait-for-api
           image: ghcr.io/acidmal/universal-discord-bot-bot:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           command:
             - python
             - -c
@@ -37,7 +35,7 @@ spec:
       containers:
         - name: bot
           image: ghcr.io/acidmal/universal-discord-bot-bot:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           env:
             - name: NODE_ID
               valueFrom:

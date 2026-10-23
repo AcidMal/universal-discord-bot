@@ -1,8 +1,8 @@
+# Workloads only. ./deploy-k8s.sh fills in secrets, the public URL, and image pulls.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - namespace.yaml
-  - configmap.yaml
   - postgres.yaml
   - api.yaml
   - bot.yaml

@@ -1,5 +1,7 @@
 .env
 deploy/kubernetes/secret.yaml
+deploy/kubernetes/cluster.env
+deploy/kubernetes/.generated/
 .venv/
 venv/
 __pycache__/

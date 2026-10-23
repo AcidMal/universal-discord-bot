@@ -26,12 +26,10 @@ spec:
       labels:
         app: api
     spec:
-      imagePullSecrets:
-        - name: ghcr
       containers:
         - name: api
           image: ghcr.io/acidmal/universal-discord-bot-api:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8000
