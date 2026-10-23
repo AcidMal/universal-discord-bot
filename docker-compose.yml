@@ -16,6 +16,7 @@ services:
       retries: 10
 
   bot:
+    image: ghcr.io/acidmal/universal-discord-bot-bot:latest
     build:
       context: .
       dockerfile: docker/Dockerfile.bot
@@ -30,6 +31,7 @@ services:
     restart: unless-stopped
 
   api:
+    image: ghcr.io/acidmal/universal-discord-bot-api:latest
     build:
       context: .
       dockerfile: docker/Dockerfile.api
@@ -57,6 +59,7 @@ services:
     restart: unless-stopped
 
   web:
+    image: ghcr.io/acidmal/universal-discord-bot-web:latest
     build:
       context: .
       dockerfile: docker/Dockerfile.web

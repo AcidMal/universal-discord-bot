@@ -128,18 +128,38 @@ docker compose down
 
 The manifests in `deploy/kubernetes` run the same four pieces as Compose: Postgres 18.1, the API (migrations before it serves), the dashboard, and one or more gateway pods. Shard leases stay in Postgres, so the pods do not need Redis.
 
-Build the images and load them into the cluster (or push them and set `image` in the deployments). `imagePullPolicy` is `IfNotPresent`, so a local name works with kind or minikube:
+Compose and the manifests use the same GitHub Container Registry tags. A local name such as `universal-discord-bot-api:latest` cannot be pushed, and the cluster would look for it on Docker Hub.
+
+| Service | Image |
+| --- | --- |
+| API | `ghcr.io/acidmal/universal-discord-bot-api:latest` |
+| Bot | `ghcr.io/acidmal/universal-discord-bot-bot:latest` |
+| Web | `ghcr.io/acidmal/universal-discord-bot-web:latest` |
+
+Log in with a GitHub personal access token that has `write:packages`, then build and push. Postgres stays on `postgres:18.1` and is not part of this push.
 
 ```bash
-docker build -f docker/Dockerfile.api -t universal-discord-bot-api:latest .
-docker build -f docker/Dockerfile.bot -t universal-discord-bot-bot:latest .
-docker build -f docker/Dockerfile.web -t universal-discord-bot-web:latest .
+echo "$GHCR_TOKEN" | docker login ghcr.io -u acidmal --password-stdin
+docker compose build api bot web
+docker compose push api bot web
 ```
 
-Create the secret from the example, then set the public values. `POSTGRES_PASSWORD` and the password inside `DATABASE_URL` must match. `PUBLIC_URL` must be the Ingress host, with `https://` and no trailing slash.
+The cluster pulls those tags on each start. New GHCR packages are private, so create a pull secret in the namespace before the pods start:
+
+```bash
+kubectl apply -f deploy/kubernetes/namespace.yaml
+kubectl create secret docker-registry ghcr \
+  --namespace universal-discord-bot \
+  --docker-server=ghcr.io \
+  --docker-username=acidmal \
+  --docker-password="$GHCR_TOKEN"
+```
+
+Create the app secret from the example, then set the public values. The pull secret above only lets the cluster download images. `POSTGRES_PASSWORD` and the password inside `DATABASE_URL` must match. `PUBLIC_URL` must be the Ingress host, with `https://` and no trailing slash.
 
 ```bash
 cp deploy/kubernetes/secret.example.yaml deploy/kubernetes/secret.yaml
+kubectl apply -f deploy/kubernetes/namespace.yaml
 kubectl apply -f deploy/kubernetes/secret.yaml
 ```
 

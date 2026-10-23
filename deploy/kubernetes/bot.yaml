@@ -14,10 +14,12 @@ spec:
       labels:
         app: bot
     spec:
+      imagePullSecrets:
+        - name: ghcr
       initContainers:
         - name: wait-for-api
-          image: universal-discord-bot-bot:latest
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/acidmal/universal-discord-bot-bot:latest
+          imagePullPolicy: Always
           command:
             - python
             - -c
@@ -34,8 +36,8 @@ spec:
               raise SystemExit("API did not become healthy")
       containers:
         - name: bot
-          image: universal-discord-bot-bot:latest
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/acidmal/universal-discord-bot-bot:latest
+          imagePullPolicy: Always
           env:
             - name: NODE_ID
               valueFrom:
