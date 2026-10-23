@@ -122,7 +122,48 @@ docker compose up -d --build
 docker compose down
 ```
 
-`docker compose down` keeps the Postgres volume. `docker compose down -v` deletes it.
+`docker compose down` keeps the Postgres volume. `docker compose down -v` deletes it. The volume is mounted at `/var/lib/postgresql`, which is where the Postgres 18 image writes its data.
+
+## Deploy on Kubernetes
+
+The manifests in `deploy/kubernetes` run the same four pieces as Compose: Postgres 18.1, the API (migrations before it serves), the dashboard, and one or more gateway pods. Shard leases stay in Postgres, so the pods do not need Redis.
+
+Build the images and load them into the cluster (or push them and set `image` in the deployments). `imagePullPolicy` is `IfNotPresent`, so a local name works with kind or minikube:
+
+```bash
+docker build -f docker/Dockerfile.api -t universal-discord-bot-api:latest .
+docker build -f docker/Dockerfile.bot -t universal-discord-bot-bot:latest .
+docker build -f docker/Dockerfile.web -t universal-discord-bot-web:latest .
+```
+
+Create the secret from the example, then set the public values. `POSTGRES_PASSWORD` and the password inside `DATABASE_URL` must match. `PUBLIC_URL` must be the Ingress host, with `https://` and no trailing slash.
+
+```bash
+cp deploy/kubernetes/secret.example.yaml deploy/kubernetes/secret.yaml
+kubectl apply -f deploy/kubernetes/secret.yaml
+```
+
+Edit `deploy/kubernetes/configmap.yaml` (`PUBLIC_URL`, `DISCORD_CLIENT_ID`, `BOT_ADMIN_IDS`, `SHARD_COUNT`, `TWITCH_CLIENT_ID`) and the host in `deploy/kubernetes/ingress.yaml`. The Ingress sends `/api`, `/auth`, `/health`, and `/twitch` to the API and everything else to the dashboard. Put the same host in the Discord OAuth redirect as `{PUBLIC_URL}/auth/callback`. Twitch EventSub uses `{PUBLIC_URL}/twitch/eventsub`, so the Ingress host needs a public HTTPS certificate. Add a `tls` block on the Ingress when you have one.
+
+```bash
+kubectl apply -k deploy/kubernetes
+kubectl rollout status deployment/api -n universal-discord-bot
+kubectl rollout status deployment/bot -n universal-discord-bot
+```
+
+Each gateway pod sets `NODE_ID` to its own pod name, so replicas do not share a lease. Leave the bot at one replica until Discord assigns more than one shard, then:
+
+```bash
+kubectl scale deployment/bot -n universal-discord-bot --replicas=2
+```
+
+The API entrypoint waits until Postgres accepts connections, runs `alembic upgrade head`, then serves `/health`. Gateway pods wait for that health check before they log in. Postgres stores its data on a 5Gi volume mounted at `/var/lib/postgresql`, which is the path the Postgres 18 image expects. After you change the ConfigMap or Secret, restart the API and the bot so they pick up the new values:
+
+```bash
+kubectl rollout restart deployment/api deployment/bot -n universal-discord-bot
+```
+
+To use a database you already run, delete `postgres.yaml` from `deploy/kubernetes/kustomization.yaml` and point `DATABASE_URL` at that server.
 
 ## Configuration
 
@@ -260,6 +301,7 @@ The scheduler is safe to run on every connected node. `scheduled_actions` rows a
 | `web/` | Vite + React dashboard |
 | `migrations/` | Alembic |
 | `deploy.sh`, `deploy.ps1` | One-command Docker deploy |
+| `deploy/kubernetes/` | Kubernetes manifests for the same stack |
 | `COMMANDS.md` | Slash command reference |
 
 ## Tests

@@ -1,4 +1,5 @@
 .env
+deploy/kubernetes/secret.yaml
 .venv/
 venv/
 __pycache__/

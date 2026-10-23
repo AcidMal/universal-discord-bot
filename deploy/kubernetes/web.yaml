@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: universal-discord-bot
+spec:
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 5173
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: universal-discord-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: universal-discord-bot-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5173
+          env:
+            - name: API_PROXY
+              value: http://api:8000
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi

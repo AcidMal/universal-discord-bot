@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bot
+  namespace: universal-discord-bot
+spec:
+  # One replica until Discord assigns more than one shard. Each pod claims its own leases.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bot
+  template:
+    metadata:
+      labels:
+        app: bot
+    spec:
+      initContainers:
+        - name: wait-for-api
+          image: universal-discord-bot-bot:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -c
+            - |
+              import time
+              import urllib.request
+              url = "http://api:8000/health"
+              for _ in range(90):
+                  try:
+                      urllib.request.urlopen(url, timeout=2)
+                      raise SystemExit(0)
+                  except Exception:
+                      time.sleep(2)
+              raise SystemExit("API did not become healthy")
+      containers:
+        - name: bot
+          image: universal-discord-bot-bot:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: bot-secrets
+                  key: DATABASE_URL
+            - name: DISCORD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: bot-secrets
+                  key: DISCORD_TOKEN
+            - name: DISCORD_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: bot-secrets
+                  key: DISCORD_CLIENT_SECRET
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: bot-secrets
+                  key: SESSION_SECRET
+            - name: TWITCH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: bot-secrets
+                  key: TWITCH_CLIENT_SECRET
+            - name: TWITCH_EVENTSUB_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: bot-secrets
+                  key: TWITCH_EVENTSUB_SECRET
+            - name: PUBLIC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: PUBLIC_URL
+            - name: DISCORD_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: DISCORD_CLIENT_ID
+            - name: BOT_ADMIN_IDS
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: BOT_ADMIN_IDS
+            - name: SHARD_COUNT
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: SHARD_COUNT
+            - name: TWITCH_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: TWITCH_CLIENT_ID
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
