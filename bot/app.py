@@ -12,6 +12,7 @@ EXTENSIONS = (
     "bot.cogs.lockdown",
     "bot.cogs.automod",
     "bot.cogs.theme",
+    "bot.cogs.twitch",
     "bot.scheduler",
 )
 

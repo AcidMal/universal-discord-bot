@@ -69,6 +69,8 @@ function Prompt-Value([string]$Key, [string]$Label, [switch]$Secret) {
 Prompt-Value DISCORD_TOKEN "Discord bot token" -Secret
 Prompt-Value DISCORD_CLIENT_ID "Discord application client ID"
 Prompt-Value DISCORD_CLIENT_SECRET "Discord application client secret" -Secret
+Prompt-Value TWITCH_CLIENT_ID "Twitch client ID (optional, Enter to skip)"
+Prompt-Value TWITCH_CLIENT_SECRET "Twitch client secret (optional, Enter to skip)" -Secret
 
 if (-not (Get-Kv PUBLIC_URL)) {
     if ($NonInteractive) {
@@ -80,6 +82,12 @@ if (-not (Get-Kv PUBLIC_URL)) {
         if (-not $entered) { $entered = "http://localhost:5173" }
         Set-Kv PUBLIC_URL $entered
     }
+}
+
+if (-not (Get-Kv TWITCH_EVENTSUB_SECRET)) {
+    $twitchBytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($twitchBytes)
+    Set-Kv TWITCH_EVENTSUB_SECRET (([BitConverter]::ToString($twitchBytes) -replace "-", "").ToLower())
 }
 
 if (-not (Get-Kv SESSION_SECRET)) {
