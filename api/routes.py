@@ -1,0 +1,777 @@
+from __future__ import annotations
+
+import re
+import secrets
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+from urllib.parse import urlencode
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+
+from api.discord_api import can_manage, discord_request
+from api.security import STATE_COOKIE, clear_session, read_session, write_session
+from shared.db import get_session_factory
+from shared.enums import AuditSource, AutomodAction, AutomodRuleType, ReportStatus
+from shared.models import AutomodRule, Case, Guild, GuildConfig, GuildTheme, MemberNote, Report, StaffRole
+from shared.services import (
+    add_audit,
+    apply_preset,
+    notes_for_target,
+    notify_guild,
+    reports_for_guild,
+    upsert_staff_role,
+)
+from shared.settings import get_settings
+from shared.theme import EMBED_TEMPLATE_KEYS, PRESETS, render_css_tokens, render_embed
+
+router = APIRouter()
+HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+PLACEHOLDERS = {"{case}", "{type}", "{target}", "{reason}", "{moderator}"}
+
+
+def _snow(value: int | None) -> str | None:
+    return None if value is None else str(value)
+
+
+def _parse_snow(value: str | None, field: str) -> int | None:
+    if value is None or value == "":
+        return None
+    if not str(value).isdigit():
+        raise HTTPException(status_code=422, detail=f"{field} must be a snowflake")
+    return int(value)
+
+
+def _redirect_uri() -> str:
+    return f"{get_settings().public_url}/auth/callback"
+
+
+def _check_hex(value: str, field: str) -> str:
+    if not HEX.match(value):
+        raise HTTPException(status_code=422, detail=f"{field} must be a #RRGGBB color")
+    return value
+
+
+async def _accessible_guilds(session_data: dict) -> list[dict[str, Any]]:
+    settings = get_settings()
+    oauth_guilds = await discord_request("GET", "/users/@me/guilds", token=session_data["access_token"])
+    if oauth_guilds is None:
+        raise HTTPException(status_code=401, detail="Discord session expired")
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = list((await session.scalars(select(Guild).where(Guild.left_at.is_(None)))).all())
+        known = {row.id: row.name for row in rows}
+    visible: list[dict[str, Any]] = []
+    user_id = str(session_data["user_id"])
+    for guild in oauth_guilds:
+        guild_id = int(guild["id"])
+        if guild_id not in known:
+            continue
+        permissions = int(guild.get("permissions") or 0)
+        access = "manager" if can_manage(permissions) else None
+        if access is None and settings.discord_token:
+            member = await discord_request(
+                "GET",
+                f"/guilds/{guild_id}/members/{user_id}",
+                token=settings.discord_token,
+                bot=True,
+            )
+            if member:
+                role_ids = {int(role_id) for role_id in member.get("roles") or []}
+                async with factory() as session:
+                    staff = list(
+                        (
+                            await session.scalars(select(StaffRole).where(StaffRole.guild_id == guild_id))
+                        ).all()
+                    )
+                    if any(row.role_id in role_ids for row in staff):
+                        access = "staff"
+        if access is None:
+            continue
+        visible.append(
+            {
+                "id": str(guild_id),
+                "name": known[guild_id],
+                "access": access,
+            }
+        )
+    return visible
+
+
+async def _require_guild(request: Request, guild_id: int) -> dict[str, Any]:
+    session_data = read_session(request)
+    guilds = await _accessible_guilds(session_data)
+    match = next((guild for guild in guilds if guild["id"] == str(guild_id)), None)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return session_data
+
+
+@router.get("/auth/login")
+async def login() -> Response:
+    settings = get_settings()
+    if not settings.discord_client_id or not settings.discord_client_secret:
+        raise HTTPException(status_code=503, detail="Discord OAuth is not configured")
+    state = secrets.token_urlsafe(24)
+    query = urlencode(
+        {
+            "client_id": settings.discord_client_id,
+            "redirect_uri": _redirect_uri(),
+            "response_type": "code",
+            "scope": "identify guilds",
+            "state": state,
+        }
+    )
+    redirect = Response(status_code=302, headers={"Location": f"https://discord.com/oauth2/authorize?{query}"})
+    redirect.set_cookie(
+        STATE_COOKIE,
+        state,
+        httponly=True,
+        samesite="lax",
+        secure=settings.public_url.startswith("https"),
+        max_age=600,
+        path="/",
+    )
+    return redirect
+
+
+@router.get("/auth/callback")
+async def callback(request: Request, code: str = "", state: str = "", error: str = "") -> Response:
+    settings = get_settings()
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    expected = request.cookies.get(STATE_COOKIE)
+    if not code or not state or not expected or state != expected:
+        raise HTTPException(status_code=400, detail="OAuth state did not match")
+    token = await discord_request(
+        "POST",
+        "/oauth2/token",
+        token="",
+        form={
+            "client_id": settings.discord_client_id,
+            "client_secret": settings.discord_client_secret,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": _redirect_uri(),
+        },
+    )
+    if not token or "access_token" not in token:
+        raise HTTPException(status_code=400, detail="Discord did not return a token")
+    user = await discord_request("GET", "/users/@me", token=token["access_token"])
+    if not user:
+        raise HTTPException(status_code=400, detail="Discord did not return a user")
+    redirect = Response(status_code=302, headers={"Location": settings.public_url + "/"})
+    write_session(
+        redirect,
+        {
+            "user_id": str(user["id"]),
+            "username": user.get("global_name") or user.get("username") or "staff",
+            "access_token": token["access_token"],
+        },
+    )
+    redirect.delete_cookie(STATE_COOKIE, path="/")
+    return redirect
+
+
+@router.post("/auth/logout")
+async def logout() -> Response:
+    response = Response(status_code=204)
+    clear_session(response)
+    return response
+
+
+@router.get("/api/me")
+async def me(request: Request) -> dict[str, str]:
+    session_data = read_session(request)
+    return {"id": str(session_data["user_id"]), "username": str(session_data.get("username") or "")}
+
+
+@router.get("/api/guilds")
+async def guilds(request: Request) -> list[dict[str, Any]]:
+    return await _accessible_guilds(read_session(request))
+
+
+def _config_out(config: GuildConfig) -> dict[str, Any]:
+    return {
+        "locale": config.locale,
+        "timezone": config.timezone,
+        "log_channel_id": _snow(config.log_channel_id),
+        "timeout_default_seconds": config.timeout_default_seconds,
+        "module_toggles": config.module_toggles,
+        "ignored_channel_ids": [str(item) for item in config.ignored_channel_ids or []],
+        "ignored_role_ids": [str(item) for item in config.ignored_role_ids or []],
+    }
+
+
+def _theme_out(theme: GuildTheme) -> dict[str, Any]:
+    payload = {
+        "preset": theme.preset,
+        "accent": theme.accent,
+        "background": theme.background,
+        "surface": theme.surface,
+        "text": theme.text,
+        "radius": theme.radius,
+        "footer": theme.footer,
+        "author_name": theme.author_name,
+        "logo_url": theme.logo_url,
+        "embed_templates": theme.embed_templates,
+        "tokens": render_css_tokens(theme),
+    }
+    payload["preview"] = render_embed(
+        theme,
+        "case",
+        {
+            "case": "42",
+            "type": "warn",
+            "target": "member",
+            "reason": "Preview case. Nothing was saved.",
+            "moderator": "staff",
+        },
+    )
+    return payload
+
+
+class ConfigPatch(BaseModel):
+    locale: str | None = None
+    timezone: str | None = None
+    log_channel_id: str | None = None
+    timeout_default_seconds: int | None = Field(default=None, ge=1, le=28 * 86400)
+    module_toggles: dict[str, bool] | None = None
+    ignored_channel_ids: list[str] | None = None
+    ignored_role_ids: list[str] | None = None
+
+
+class ThemePatch(BaseModel):
+    preset: str
+    accent: str | None = None
+    background: str | None = None
+    surface: str | None = None
+    text: str | None = None
+    radius: str | None = None
+    footer: str | None = None
+    author_name: str | None = None
+    logo_url: str | None = None
+    embed_templates: dict[str, dict[str, str]] | None = None
+
+
+class RuleBody(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    type: AutomodRuleType
+    action: AutomodAction
+    enabled: bool = True
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class RulePatch(BaseModel):
+    name: str | None = None
+    action: AutomodAction | None = None
+    enabled: bool | None = None
+    config: dict[str, Any] | None = None
+
+
+class StaffBody(BaseModel):
+    role_id: str
+    can_warn: bool = True
+    can_timeout: bool = True
+    can_kick: bool = True
+    can_ban: bool = True
+
+
+class NoteBody(BaseModel):
+    target_id: str
+    body: str = Field(min_length=1, max_length=2000)
+
+
+class ReportPatch(BaseModel):
+    status: ReportStatus
+
+
+@router.get("/api/guilds/{guild_id}")
+async def guild_detail(guild_id: str, request: Request) -> dict[str, Any]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    factory = get_session_factory()
+    async with factory() as session:
+        guild = await session.get(Guild, parsed)
+        config = await session.get(GuildConfig, parsed)
+        theme = await session.get(GuildTheme, parsed)
+        if guild is None or config is None or theme is None:
+            raise HTTPException(status_code=404, detail="Server not found")
+        return {
+            "id": str(guild.id),
+            "name": guild.name,
+            "config": _config_out(config),
+            "theme": _theme_out(theme),
+            "actor": str(session_data["user_id"]),
+        }
+
+
+@router.patch("/api/guilds/{guild_id}/config")
+async def patch_config(guild_id: str, body: ConfigPatch, request: Request) -> dict[str, Any]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    if body.timezone:
+        try:
+            ZoneInfo(body.timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise HTTPException(status_code=422, detail="Unknown timezone") from exc
+    factory = get_session_factory()
+    async with factory() as session:
+        config = await session.get(GuildConfig, parsed)
+        if config is None:
+            raise HTTPException(status_code=404, detail="Server not found")
+        if body.locale is not None:
+            config.locale = body.locale[:16]
+        if body.timezone is not None:
+            config.timezone = body.timezone
+        if body.log_channel_id is not None:
+            config.log_channel_id = _parse_snow(body.log_channel_id, "log_channel_id")
+        if body.timeout_default_seconds is not None:
+            config.timeout_default_seconds = body.timeout_default_seconds
+        if body.module_toggles is not None:
+            allowed = {"cases", "automod", "lockdown", "reports", "notes"}
+            config.module_toggles = {
+                key: bool(value) for key, value in body.module_toggles.items() if key in allowed
+            }
+        if body.ignored_channel_ids is not None:
+            config.ignored_channel_ids = [
+                str(_parse_snow(item, "ignored_channel_ids")) for item in body.ignored_channel_ids
+            ]
+        if body.ignored_role_ids is not None:
+            config.ignored_role_ids = [
+                str(_parse_snow(item, "ignored_role_ids")) for item in body.ignored_role_ids
+            ]
+        config.updated_at = datetime.now(timezone.utc)
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="config.update",
+            source=AuditSource.DASHBOARD,
+        )
+        await notify_guild(session, parsed)
+        await session.commit()
+        return _config_out(config)
+
+
+def _clean_templates(templates: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    cleaned: dict[str, dict[str, str]] = {}
+    for key, block in templates.items():
+        if key not in EMBED_TEMPLATE_KEYS:
+            raise HTTPException(status_code=422, detail=f"Unknown template {key}")
+        title = str(block.get("title", ""))[:256]
+        description = str(block.get("description", ""))[:500]
+        for chunk in (title, description):
+            for match in re.findall(r"\{[a-z_]+\}", chunk):
+                if match not in PLACEHOLDERS:
+                    raise HTTPException(status_code=422, detail=f"Unknown placeholder {match}")
+        cleaned[key] = {"title": title, "description": description}
+    return cleaned
+
+
+@router.put("/api/guilds/{guild_id}/theme")
+async def put_theme(guild_id: str, body: ThemePatch, request: Request) -> dict[str, Any]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    preset_name = body.preset.strip().lower()
+    if preset_name != "custom" and preset_name not in PRESETS:
+        raise HTTPException(status_code=422, detail="Unknown preset")
+    factory = get_session_factory()
+    async with factory() as session:
+        theme = await session.get(GuildTheme, parsed)
+        if theme is None:
+            raise HTTPException(status_code=404, detail="Server not found")
+        if preset_name != "custom":
+            apply_preset(theme, preset_name)
+        else:
+            theme.preset = "custom"
+        if body.accent:
+            theme.accent = _check_hex(body.accent, "accent")
+        if body.background:
+            theme.background = _check_hex(body.background, "background")
+        if body.surface:
+            theme.surface = _check_hex(body.surface, "surface")
+        if body.text:
+            theme.text = _check_hex(body.text, "text")
+        if body.radius is not None:
+            if len(body.radius) > 16:
+                raise HTTPException(status_code=422, detail="radius is too long")
+            theme.radius = body.radius
+        if body.footer is not None:
+            theme.footer = body.footer[:2048]
+        if body.author_name is not None:
+            theme.author_name = body.author_name[:256]
+        if body.logo_url is not None:
+            theme.logo_url = body.logo_url or None
+        if body.embed_templates is not None:
+            theme.embed_templates = _clean_templates(body.embed_templates)
+        theme.updated_at = datetime.now(timezone.utc)
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="theme.update",
+            source=AuditSource.DASHBOARD,
+            payload={"preset": theme.preset},
+        )
+        await notify_guild(session, parsed)
+        await session.commit()
+        return _theme_out(theme)
+
+
+@router.get("/api/guilds/{guild_id}/cases")
+async def list_cases(guild_id: str, request: Request, target_id: str | None = None) -> list[dict[str, Any]]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    await _require_guild(request, parsed)
+    target = _parse_snow(target_id, "target_id") if target_id else None
+    factory = get_session_factory()
+    async with factory() as session:
+        stmt = select(Case).where(Case.guild_id == parsed)
+        if target is not None:
+            stmt = stmt.where(Case.target_id == target)
+        rows = list((await session.scalars(stmt.order_by(Case.case_number.desc()).limit(100))).all())
+        return [
+            {
+                "id": str(row.id),
+                "case_number": row.case_number,
+                "type": row.type,
+                "target_id": str(row.target_id),
+                "moderator_id": _snow(row.moderator_id),
+                "reason": row.reason,
+                "evidence_url": row.evidence_url,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                "reversed_at": row.reversed_at.isoformat() if row.reversed_at else None,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ]
+
+
+@router.get("/api/guilds/{guild_id}/reports")
+async def list_reports(guild_id: str, request: Request) -> list[dict[str, Any]]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    await _require_guild(request, parsed)
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = await reports_for_guild(session, parsed, limit=100)
+        return [
+            {
+                "id": str(row.id),
+                "reporter_id": str(row.reporter_id),
+                "target_id": str(row.target_id),
+                "reason": row.reason,
+                "status": row.status,
+                "jump_url": row.jump_url,
+                "claimed_by": _snow(row.claimed_by),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ]
+
+
+@router.patch("/api/guilds/{guild_id}/reports/{report_id}")
+async def patch_report(guild_id: str, report_id: str, body: ReportPatch, request: Request) -> dict[str, str]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    try:
+        report_uuid = uuid.UUID(report_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid report id") from exc
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.get(Report, report_uuid)
+        if row is None or row.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Report not found")
+        row.status = body.status
+        if body.status == ReportStatus.CLAIMED:
+            row.claimed_by = int(session_data["user_id"])
+        if body.status in {ReportStatus.RESOLVED, ReportStatus.REJECTED}:
+            row.resolved_at = datetime.now(timezone.utc)
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action=f"report.{body.status}",
+            source=AuditSource.DASHBOARD,
+            target_type="report",
+            target_id=str(row.id),
+        )
+        await session.commit()
+    return {"id": report_id, "status": body.status}
+
+
+@router.get("/api/guilds/{guild_id}/notes")
+async def list_notes(guild_id: str, target_id: str, request: Request) -> list[dict[str, Any]]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    target = _parse_snow(target_id, "target_id")
+    assert parsed is not None and target is not None
+    await _require_guild(request, parsed)
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = await notes_for_target(session, parsed, target)
+        return [
+            {
+                "id": str(row.id),
+                "target_id": str(row.target_id),
+                "author_id": str(row.author_id),
+                "body": row.body,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ]
+
+
+@router.post("/api/guilds/{guild_id}/notes")
+async def create_note(guild_id: str, body: NoteBody, request: Request) -> dict[str, str]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    target = _parse_snow(body.target_id, "target_id")
+    assert parsed is not None and target is not None
+    session_data = await _require_guild(request, parsed)
+    factory = get_session_factory()
+    async with factory() as session:
+        note = MemberNote(
+            guild_id=parsed,
+            target_id=target,
+            author_id=int(session_data["user_id"]),
+            body=body.body.strip(),
+        )
+        session.add(note)
+        await session.flush()
+        note_id = str(note.id)
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="note.add",
+            source=AuditSource.DASHBOARD,
+            target_type="user",
+            target_id=str(target),
+        )
+        await session.commit()
+    return {"id": note_id}
+
+
+@router.get("/api/guilds/{guild_id}/automod")
+async def list_rules(guild_id: str, request: Request) -> list[dict[str, Any]]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    await _require_guild(request, parsed)
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = list(
+            (
+                await session.scalars(
+                    select(AutomodRule).where(AutomodRule.guild_id == parsed).order_by(AutomodRule.created_at)
+                )
+            ).all()
+        )
+        return [
+            {
+                "id": str(row.id),
+                "name": row.name,
+                "type": row.type,
+                "action": row.action,
+                "enabled": row.enabled,
+                "config": dict(row.config or {}),
+            }
+            for row in rows
+        ]
+
+
+@router.post("/api/guilds/{guild_id}/automod")
+async def create_rule(guild_id: str, body: RuleBody, request: Request) -> dict[str, Any]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    factory = get_session_factory()
+    async with factory() as session:
+        row = AutomodRule(
+            guild_id=parsed,
+            name=body.name.strip(),
+            type=body.type,
+            action=body.action,
+            enabled=body.enabled,
+            config=body.config,
+        )
+        session.add(row)
+        await session.flush()
+        payload = {
+            "id": str(row.id),
+            "name": row.name,
+            "type": row.type,
+            "action": row.action,
+            "enabled": row.enabled,
+            "config": row.config,
+        }
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="automod.create",
+            source=AuditSource.DASHBOARD,
+            target_type="automod_rule",
+            target_id=str(row.id),
+        )
+        await notify_guild(session, parsed)
+        await session.commit()
+    return payload
+
+
+@router.patch("/api/guilds/{guild_id}/automod/{rule_id}")
+async def patch_rule(guild_id: str, rule_id: str, body: RulePatch, request: Request) -> dict[str, Any]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    try:
+        rule_uuid = uuid.UUID(rule_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid rule id") from exc
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.get(AutomodRule, rule_uuid)
+        if row is None or row.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        if body.name is not None:
+            row.name = body.name.strip()[:100]
+        if body.action is not None:
+            row.action = body.action
+        if body.enabled is not None:
+            row.enabled = body.enabled
+        if body.config is not None:
+            row.config = body.config
+        row.updated_at = datetime.now(timezone.utc)
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="automod.update",
+            source=AuditSource.DASHBOARD,
+            target_id=str(row.id),
+        )
+        await notify_guild(session, parsed)
+        await session.commit()
+        return {
+            "id": str(row.id),
+            "name": row.name,
+            "type": row.type,
+            "action": row.action,
+            "enabled": row.enabled,
+            "config": row.config,
+        }
+
+
+@router.delete("/api/guilds/{guild_id}/automod/{rule_id}")
+async def delete_rule(guild_id: str, rule_id: str, request: Request) -> Response:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    try:
+        rule_uuid = uuid.UUID(rule_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid rule id") from exc
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.get(AutomodRule, rule_uuid)
+        if row is None or row.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Rule not found")
+        await session.delete(row)
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="automod.delete",
+            source=AuditSource.DASHBOARD,
+            target_id=rule_id,
+        )
+        await notify_guild(session, parsed)
+        await session.commit()
+    return Response(status_code=204)
+
+
+@router.get("/api/guilds/{guild_id}/staff")
+async def list_staff(guild_id: str, request: Request) -> list[dict[str, Any]]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    await _require_guild(request, parsed)
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = list((await session.scalars(select(StaffRole).where(StaffRole.guild_id == parsed))).all())
+        return [
+            {
+                "id": str(row.id),
+                "role_id": str(row.role_id),
+                "can_warn": row.can_warn,
+                "can_timeout": row.can_timeout,
+                "can_kick": row.can_kick,
+                "can_ban": row.can_ban,
+            }
+            for row in rows
+        ]
+
+
+@router.post("/api/guilds/{guild_id}/staff")
+async def add_staff(guild_id: str, body: StaffBody, request: Request) -> dict[str, str]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    role_id = _parse_snow(body.role_id, "role_id")
+    assert parsed is not None and role_id is not None
+    session_data = await _require_guild(request, parsed)
+    factory = get_session_factory()
+    async with factory() as session:
+        await upsert_staff_role(
+            session,
+            parsed,
+            role_id,
+            can_warn=body.can_warn,
+            can_timeout=body.can_timeout,
+            can_kick=body.can_kick,
+            can_ban=body.can_ban,
+        )
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="staff.upsert",
+            source=AuditSource.DASHBOARD,
+            target_type="role",
+            target_id=str(role_id),
+        )
+        await notify_guild(session, parsed)
+        await session.commit()
+    return {"role_id": str(role_id)}
+
+
+@router.delete("/api/guilds/{guild_id}/staff/{staff_id}")
+async def delete_staff(guild_id: str, staff_id: str, request: Request) -> Response:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    try:
+        staff_uuid = uuid.UUID(staff_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid staff id") from exc
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.get(StaffRole, staff_uuid)
+        if row is None or row.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Staff role not found")
+        await session.delete(row)
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="staff.delete",
+            source=AuditSource.DASHBOARD,
+            target_id=staff_id,
+        )
+        await notify_guild(session, parsed)
+        await session.commit()
+    return Response(status_code=204)

@@ -385,6 +385,32 @@ class AutomodWindow(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class Lockdown(Base):
+    __tablename__ = "lockdowns"
+
+    guild_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("guilds.id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+    case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("cases.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    moderator_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'{}'::jsonb"),
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ProcessedEvent(Base):
     __tablename__ = "processed_events"
 

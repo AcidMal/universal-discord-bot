@@ -23,8 +23,9 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://bot:bot@postgres:5432/bot
+      NODE_ID: ""
     depends_on:
-      postgres:
+      api:
         condition: service_healthy
     restart: unless-stopped
 
@@ -41,6 +42,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     restart: unless-stopped
 
   web:

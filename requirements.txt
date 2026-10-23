@@ -7,3 +7,5 @@ alembic>=1.14
 pydantic>=2.9
 pydantic-settings>=2.6
 greenlet>=3.0
+httpx>=0.28
+itsdangerous>=2.2

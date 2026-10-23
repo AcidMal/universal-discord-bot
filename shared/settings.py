@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,7 +21,14 @@ class Settings(BaseSettings):
     discord_client_id: str = ""
     discord_client_secret: str = ""
     public_url: str = "http://localhost:5173"
+    session_secret: str = "dev-session-secret-change-me"
     node_id: str = ""
+    shard_count: int = 0
+
+    @field_validator("public_url")
+    @classmethod
+    def strip_public_url(cls, value: str) -> str:
+        return value.rstrip("/")
 
 
 @lru_cache(maxsize=1)

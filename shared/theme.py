@@ -117,8 +117,8 @@ def render_embed(
     color_hex = theme.accent.lstrip("#")
     color = int(color_hex, 16) if color_hex else 0
     embed: dict[str, Any] = {
-        "title": _substitute(str(block.get("title", "")), substitutions),
-        "description": _substitute(str(block.get("description", "")), substitutions),
+        "title": _substitute(str(block.get("title", "")), substitutions)[:256],
+        "description": _substitute(str(block.get("description", "")), substitutions)[:4096],
         "color": color,
     }
     if theme.footer:
