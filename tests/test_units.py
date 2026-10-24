@@ -1,7 +1,22 @@
 import unittest
 
 from bot.duration import parse_duration
+from shared.pg import asyncpg_connect_args
 from shared.theme import PRESETS, render_css_tokens, render_embed
+
+
+class DatabaseUrlTests(unittest.TestCase):
+    def test_ssl_query_becomes_a_connect_option(self) -> None:
+        dsn, kwargs = asyncpg_connect_args(
+            "postgresql+asyncpg://bot:secret@db.example:28430/defaultdb?ssl=require"
+        )
+        self.assertEqual(dsn, "postgresql://bot:secret@db.example:28430/defaultdb")
+        self.assertEqual(kwargs, {"ssl": "require"})
+
+    def test_local_url_stays_plain(self) -> None:
+        dsn, kwargs = asyncpg_connect_args("postgresql+asyncpg://bot:bot@postgres:5432/bot")
+        self.assertEqual(dsn, "postgresql://bot:bot@postgres:5432/bot")
+        self.assertEqual(kwargs, {})
 
 
 class DurationTests(unittest.TestCase):

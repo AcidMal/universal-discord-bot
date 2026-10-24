@@ -12,6 +12,7 @@ import aiohttp
 from sqlalchemy import text
 
 from shared.db import get_session_factory
+from shared.pg import asyncpg_connect_args
 from shared.settings import get_settings
 
 log = logging.getLogger("bot.cluster")
@@ -20,8 +21,8 @@ GATEWAY_URL = "https://discord.com/api/v10/gateway/bot"
 
 
 def asyncpg_dsn(database_url: str | None = None) -> str:
-    url = database_url or get_settings().database_url
-    return url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    dsn, _kwargs = asyncpg_connect_args(database_url or get_settings().database_url)
+    return dsn
 
 
 async def recommended_shard_count(token: str) -> int:
@@ -232,11 +233,11 @@ async def listen_forever() -> None:
 
     from bot.cache import get_cache
 
-    dsn = asyncpg_dsn()
+    dsn, connect_kwargs = asyncpg_connect_args(get_settings().database_url)
     while True:
         conn = None
         try:
-            conn = await asyncpg.connect(dsn)
+            conn = await asyncpg.connect(dsn, **connect_kwargs)
 
             def _on_notify(_conn, _pid, channel: str, payload: str) -> None:
                 if channel == "bot_settings":
