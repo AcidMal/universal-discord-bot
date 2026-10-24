@@ -70,6 +70,34 @@ class Notes(commands.Cog):
             return
         await interaction.response.send_message("\n".join(lines)[:1900], ephemeral=True)
 
+    @notes.command(name="delete", description="Delete one staff note")
+    @app_commands.describe(member="Member the note is about", note_id="Note id from /notes list")
+    @app_commands.guild_only()
+    async def delete_note(self, interaction: discord.Interaction, member: discord.Member, note_id: str) -> None:
+        if not await prepare(interaction, "notes", "notes"):
+            return
+        assert interaction.guild is not None
+        factory = get_session_factory()
+        async with factory() as session:
+            rows = await notes_for_target(session, interaction.guild.id, member.id)
+            matches = [note for note in rows if str(note.id).startswith(note_id.strip())]
+            if len(matches) != 1:
+                await interaction.response.send_message("That note id did not match one note.", ephemeral=True)
+                return
+            note = matches[0]
+            await session.delete(note)
+            await add_audit(
+                session,
+                guild_id=interaction.guild.id,
+                actor_id=interaction.user.id,
+                action="note.delete",
+                source=AuditSource.COMMAND,
+                target_type="note",
+                target_id=str(note.id),
+            )
+            await session.commit()
+        await interaction.response.send_message("Note deleted.", ephemeral=True)
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Notes(bot))

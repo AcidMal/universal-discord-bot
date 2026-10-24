@@ -19,6 +19,9 @@ Discord administrators can run every command. Everyone else needs the native per
 | `/ban`, `/unban` | Ban Members | Ban |
 | `/lockdown` | Manage Channels or Manage Server | Ban |
 | `/report` | Any member | — |
+| `/ticket open` | Any member | — |
+| `/ticket close`, dashboard ticket actions | Moderate Members, Manage Channels, or Manage Server | Warn |
+| `/ticket panel` | Manage Server | — |
 | `/ping` | Any member | — |
 
 The bot also refuses a punishment when the target is above the moderator or above the bot's highest role.
@@ -149,7 +152,28 @@ Notes are staff-only and are not punishments. They do not appear in the public m
 | --- | --- | --- |
 | `member` | yes | Member to look up |
 
-The dashboard Notes tab can add and read the same records.
+The dashboard Notes tab can add, read, and delete the same records.
+
+### `/notes delete`
+
+| Option | Required | Meaning |
+| --- | --- | --- |
+| `member` | yes | Member the note is about |
+| `note_id` | yes | Id shown by `/notes list`. A unique prefix is enough |
+
+## Tickets
+
+A ticket is a private channel for one member and the staff. `/ticket panel` posts a button in the current channel. The member describes the problem, and the bot creates `ticket-N` under the category saved on the server page. Staff can also run `/ticket open`.
+
+`/ticket close`, or Close on the server's Tickets tab, removes the channel after any pending staff reply is posted. Claim and Send on that tab post into the channel as the staff member. Each member can have 3 open tickets.
+
+The bot needs Manage Channels. Staff roles from `/setup` can see the channel. Everyone else cannot.
+
+| Command | Who |
+| --- | --- |
+| `/ticket panel` | Manage Server |
+| `/ticket open` | Any member |
+| `/ticket close` | The member who opened it, or staff |
 
 ## Reports
 

@@ -120,6 +120,7 @@ class GuildConfig(Base):
     locale: Mapped[str] = mapped_column(String(16), nullable=False, default="en-US")
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
     log_channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    ticket_category_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     timeout_default_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
     mute_default_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=600)
     module_toggles: Mapped[dict[str, Any]] = mapped_column(
@@ -207,6 +208,7 @@ class GuildCounter(Base):
         autoincrement=False,
     )
     next_case_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    next_ticket_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
 class Case(Base):
@@ -239,6 +241,57 @@ class Case(Base):
         nullable=False,
         server_default=sql_text("now()"),
     )
+
+
+class Ticket(Base):
+    __tablename__ = "tickets"
+    __table_args__ = (
+        UniqueConstraint("guild_id", "number"),
+        Index("ix_tickets_guild_id_status", "guild_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = uuidv7_pk()
+    guild_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("guilds.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    opener_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    subject: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    claimed_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    channel_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=sql_text("now()"),
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    messages: Mapped[list[TicketMessage]] = relationship(back_populates="ticket")
+
+
+class TicketMessage(Base):
+    __tablename__ = "ticket_messages"
+    __table_args__ = (Index("ix_ticket_messages_ticket_id_created_at", "ticket_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = uuidv7_pk()
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tickets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    author_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=sql_text("now()"),
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    ticket: Mapped[Ticket] = relationship(back_populates="messages")
 
 
 class MemberNote(Base):

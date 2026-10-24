@@ -18,7 +18,19 @@ from api.discord_api import can_manage, discord_request
 from api.security import STATE_COOKIE, clear_session, read_session, write_session
 from shared.db import get_session_factory
 from shared.enums import AuditSource, AutomodAction, AutomodRuleType, ReportStatus
-from shared.models import AutomodRule, Case, Guild, GuildConfig, GuildTheme, MemberNote, Report, StaffRole
+from shared.models import (
+    AutomodRule,
+    Case,
+    Guild,
+    GuildConfig,
+    GuildTheme,
+    MemberNote,
+    Report,
+    ScheduledAction,
+    StaffRole,
+    Ticket,
+    TicketMessage,
+)
 from shared.services import (
     add_audit,
     apply_preset,
@@ -48,6 +60,13 @@ def _parse_snow(value: str | None, field: str) -> int | None:
     if not str(value).isdigit():
         raise HTTPException(status_code=422, detail=f"{field} must be a snowflake")
     return int(value)
+
+
+def _parse_uuid(value: str, field: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"{field} must be an id") from exc
 
 
 def _redirect_uri() -> str:
@@ -239,6 +258,7 @@ def _config_out(config: GuildConfig) -> dict[str, Any]:
         "locale": config.locale,
         "timezone": config.timezone,
         "log_channel_id": _snow(config.log_channel_id),
+        "ticket_category_id": _snow(config.ticket_category_id),
         "timeout_default_seconds": config.timeout_default_seconds,
         "module_toggles": config.module_toggles,
         "ignored_channel_ids": [str(item) for item in config.ignored_channel_ids or []],
@@ -278,6 +298,7 @@ class ConfigPatch(BaseModel):
     locale: str | None = None
     timezone: str | None = None
     log_channel_id: str | None = None
+    ticket_category_id: str | None = None
     timeout_default_seconds: int | None = Field(default=None, ge=1, le=28 * 86400)
     module_toggles: dict[str, bool] | None = None
     ignored_channel_ids: list[str] | None = None
@@ -371,10 +392,12 @@ async def patch_config(guild_id: str, body: ConfigPatch, request: Request) -> di
             config.timezone = body.timezone
         if body.log_channel_id is not None:
             config.log_channel_id = _parse_snow(body.log_channel_id, "log_channel_id")
+        if body.ticket_category_id is not None:
+            config.ticket_category_id = _parse_snow(body.ticket_category_id, "ticket_category_id")
         if body.timeout_default_seconds is not None:
             config.timeout_default_seconds = body.timeout_default_seconds
         if body.module_toggles is not None:
-            allowed = {"cases", "automod", "lockdown", "reports", "notes"}
+            allowed = {"cases", "automod", "lockdown", "reports", "notes", "tickets"}
             config.module_toggles = {
                 key: bool(value) for key, value in body.module_toggles.items() if key in allowed
             }
@@ -615,6 +638,206 @@ async def create_note(guild_id: str, body: NoteBody, request: Request) -> dict[s
         )
         await session.commit()
     return {"id": note_id}
+
+
+@router.delete("/api/guilds/{guild_id}/notes/{note_id}", status_code=204)
+async def delete_note(guild_id: str, note_id: str, request: Request) -> None:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    note_uuid = _parse_uuid(note_id, "note_id")
+    factory = get_session_factory()
+    async with factory() as session:
+        note = await session.get(MemberNote, note_uuid)
+        if note is None or note.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Note not found")
+        await session.delete(note)
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="note.delete",
+            source=AuditSource.DASHBOARD,
+            target_type="note",
+            target_id=note_id,
+        )
+        await session.commit()
+
+
+@router.delete("/api/guilds/{guild_id}/cases/{case_id}", status_code=204)
+async def delete_case(guild_id: str, case_id: str, request: Request) -> None:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    case_uuid = _parse_uuid(case_id, "case_id")
+    factory = get_session_factory()
+    async with factory() as session:
+        case = await session.get(Case, case_uuid)
+        if case is None or case.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Case not found")
+        if case.log_channel_id and case.log_message_id:
+            session.add(
+                ScheduledAction(
+                    guild_id=parsed,
+                    case_id=None,
+                    action="delete_message",
+                    payload={"channel_id": case.log_channel_id, "message_id": case.log_message_id},
+                    run_at=datetime.now(timezone.utc),
+                )
+            )
+        await session.delete(case)
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="case.delete",
+            source=AuditSource.DASHBOARD,
+            target_type="case",
+            target_id=case_id,
+        )
+        await session.commit()
+
+
+@router.delete("/api/guilds/{guild_id}/reports/{report_id}", status_code=204)
+async def delete_report(guild_id: str, report_id: str, request: Request) -> None:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    report_uuid = _parse_uuid(report_id, "report_id")
+    factory = get_session_factory()
+    async with factory() as session:
+        report = await session.get(Report, report_uuid)
+        if report is None or report.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Report not found")
+        await session.delete(report)
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=int(session_data["user_id"]),
+            action="report.delete",
+            source=AuditSource.DASHBOARD,
+            target_type="report",
+            target_id=report_id,
+        )
+        await session.commit()
+
+
+class TicketReply(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
+def _ticket_out(row: Ticket) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "number": row.number,
+        "opener_id": str(row.opener_id),
+        "subject": row.subject,
+        "status": row.status,
+        "claimed_by": _snow(row.claimed_by),
+        "channel_id": _snow(row.channel_id),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "closed_at": row.closed_at.isoformat() if row.closed_at else None,
+    }
+
+
+@router.get("/api/guilds/{guild_id}/tickets")
+async def list_tickets(guild_id: str, request: Request) -> list[dict[str, Any]]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    await _require_guild(request, parsed)
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = list(
+            (
+                await session.scalars(
+                    select(Ticket).where(Ticket.guild_id == parsed).order_by(Ticket.number.desc()).limit(50)
+                )
+            ).all()
+        )
+        return [_ticket_out(row) for row in rows]
+
+
+@router.post("/api/guilds/{guild_id}/tickets/{ticket_id}/claim")
+async def claim_ticket(guild_id: str, ticket_id: str, request: Request) -> dict[str, Any]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    ticket_uuid = _parse_uuid(ticket_id, "ticket_id")
+    factory = get_session_factory()
+    async with factory() as session:
+        ticket = await session.get(Ticket, ticket_uuid)
+        if ticket is None or ticket.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        if ticket.status == "closed":
+            raise HTTPException(status_code=409, detail="That ticket is closed")
+        actor = int(session_data["user_id"])
+        ticket.status = "claimed"
+        ticket.claimed_by = actor
+        session.add(TicketMessage(ticket_id=ticket.id, author_id=actor, body="Claimed this ticket."))
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=actor,
+            action="ticket.claim",
+            source=AuditSource.DASHBOARD,
+            target_type="ticket",
+            target_id=ticket_id,
+        )
+        await session.commit()
+        await session.refresh(ticket)
+        return _ticket_out(ticket)
+
+
+@router.post("/api/guilds/{guild_id}/tickets/{ticket_id}/close")
+async def close_ticket(guild_id: str, ticket_id: str, request: Request) -> dict[str, Any]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    ticket_uuid = _parse_uuid(ticket_id, "ticket_id")
+    factory = get_session_factory()
+    async with factory() as session:
+        ticket = await session.get(Ticket, ticket_uuid)
+        if ticket is None or ticket.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        actor = int(session_data["user_id"])
+        ticket.status = "closed"
+        ticket.closed_at = datetime.now(timezone.utc)
+        session.add(TicketMessage(ticket_id=ticket.id, author_id=actor, body="Closed this ticket."))
+        await add_audit(
+            session,
+            guild_id=parsed,
+            actor_id=actor,
+            action="ticket.close",
+            source=AuditSource.DASHBOARD,
+            target_type="ticket",
+            target_id=ticket_id,
+        )
+        await session.commit()
+        await session.refresh(ticket)
+        return _ticket_out(ticket)
+
+
+@router.post("/api/guilds/{guild_id}/tickets/{ticket_id}/messages", status_code=204)
+async def reply_ticket(guild_id: str, ticket_id: str, body: TicketReply, request: Request) -> None:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    session_data = await _require_guild(request, parsed)
+    ticket_uuid = _parse_uuid(ticket_id, "ticket_id")
+    factory = get_session_factory()
+    async with factory() as session:
+        ticket = await session.get(Ticket, ticket_uuid)
+        if ticket is None or ticket.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        if ticket.status == "closed":
+            raise HTTPException(status_code=409, detail="That ticket is closed")
+        session.add(
+            TicketMessage(
+                ticket_id=ticket.id,
+                author_id=int(session_data["user_id"]),
+                body=body.body.strip(),
+            )
+        )
+        await session.commit()
 
 
 @router.get("/api/guilds/{guild_id}/automod")

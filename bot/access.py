@@ -12,6 +12,7 @@ _STAFF_FLAG = {
     "unban": "can_ban",
     "notes": "can_warn",
     "reports_staff": "can_warn",
+    "tickets": "can_warn",
     "lockdown": "can_ban",
 }
 
@@ -25,8 +26,10 @@ def member_can(member: discord.Member, action: str, state: GuildState) -> bool:
     if perms.administrator:
         return True
     native = False
-    if action in {"warn", "timeout", "notes", "reports_staff"}:
-        native = perms.moderate_members or perms.manage_guild
+    if action == "ticket_open":
+        return True
+    if action in {"warn", "timeout", "notes", "reports_staff", "tickets"}:
+        native = perms.moderate_members or perms.manage_guild or (action == "tickets" and perms.manage_channels)
     elif action == "kick":
         native = perms.kick_members
     elif action in {"ban", "unban"}:

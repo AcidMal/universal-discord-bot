@@ -97,6 +97,12 @@ async def _execute(bot: commands.Bot, job: dict[str, Any]) -> None:
         restored = await lockdown_end(bot, guild, "Timed lockdown ended")
         if not restored:
             log.info("unlock skipped; guild %s was not locked", guild_id)
+    elif action == "delete_message":
+        channel_id = int(payload["channel_id"])
+        channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+        message = await channel.fetch_message(int(payload["message_id"]))
+        await message.delete()
+        return
     else:
         raise RuntimeError(f"unknown scheduled action {action}")
     case_id = job["case_id"]

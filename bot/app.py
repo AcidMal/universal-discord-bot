@@ -10,6 +10,7 @@ EXTENSIONS = (
     "bot.cogs.cases",
     "bot.cogs.notes",
     "bot.cogs.reports",
+    "bot.cogs.tickets",
     "bot.cogs.lockdown",
     "bot.cogs.automod",
     "bot.cogs.theme",

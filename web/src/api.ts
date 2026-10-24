@@ -26,6 +26,7 @@ export type GuildDetail = {
     locale: string;
     timezone: string;
     log_channel_id: string | null;
+    ticket_category_id: string | null;
     timeout_default_seconds: number;
     module_toggles: Record<string, boolean>;
     ignored_channel_ids: string[];
@@ -136,6 +137,22 @@ export const api = {
     request(`/api/guilds/${id}/notes`, {
       method: "POST",
       body: JSON.stringify({ target_id: targetId, body }),
+    }),
+  deleteNote: (id: string, noteId: string) =>
+    request<void>(`/api/guilds/${id}/notes/${noteId}`, { method: "DELETE" }),
+  deleteCase: (id: string, caseId: string) =>
+    request<void>(`/api/guilds/${id}/cases/${caseId}`, { method: "DELETE" }),
+  deleteReport: (id: string, reportId: string) =>
+    request<void>(`/api/guilds/${id}/reports/${reportId}`, { method: "DELETE" }),
+  tickets: (id: string) => request<Record<string, string | number | null>[]>(`/api/guilds/${id}/tickets`),
+  claimTicket: (id: string, ticketId: string) =>
+    request(`/api/guilds/${id}/tickets/${ticketId}/claim`, { method: "POST" }),
+  closeTicket: (id: string, ticketId: string) =>
+    request(`/api/guilds/${id}/tickets/${ticketId}/close`, { method: "POST" }),
+  replyTicket: (id: string, ticketId: string, body: string) =>
+    request<void>(`/api/guilds/${id}/tickets/${ticketId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
     }),
   rules: (id: string) => request<Record<string, unknown>[]>(`/api/guilds/${id}/automod`),
   addRule: (id: string, body: unknown) =>

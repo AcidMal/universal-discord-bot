@@ -108,6 +108,22 @@ async def allocate_case_number(session: AsyncSession, guild_id: int) -> int:
     return int(result.scalar_one())
 
 
+async def allocate_ticket_number(session: AsyncSession, guild_id: int) -> int:
+    result = await session.execute(
+        text(
+            """
+            INSERT INTO guild_counters (guild_id, next_case_number, next_ticket_number)
+            VALUES (:guild_id, 1, 2)
+            ON CONFLICT (guild_id) DO UPDATE
+            SET next_ticket_number = guild_counters.next_ticket_number + 1
+            RETURNING next_ticket_number - 1 AS ticket_number
+            """
+        ),
+        {"guild_id": guild_id},
+    )
+    return int(result.scalar_one())
+
+
 async def add_audit(
     session: AsyncSession,
     *,

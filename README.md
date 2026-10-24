@@ -329,4 +329,4 @@ PYTHONPATH=. python -m unittest tests.test_units
 
 ## Out of scope
 
-Music, leveling, tickets, ban appeals, billing, cross-server bans, and custom command scripting.
+Music, leveling, ban appeals, billing, cross-server bans, and custom command scripting. Tickets are included: `/ticket panel` posts a button that opens a private channel, and staff claim, reply, and close them from the server page.

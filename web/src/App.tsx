@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { api, applyTokens, GuildDetail, GuildSummary, ThemePayload } from "./api";
 import { BotSettingsPanel, HealthPanel } from "./Status";
 
-const TABS = ["Overview", "Cases", "Reports", "Notes", "Automod", "Staff", "Theme"] as const;
+const TABS = ["Overview", "Cases", "Reports", "Notes", "Tickets", "Automod", "Staff", "Theme"] as const;
 const PRESETS = ["midnight", "light", "nord", "rose", "custom"] as const;
 const PRESET_COLORS: Record<string, Pick<ThemePayload, "accent" | "background" | "surface" | "text" | "radius">> = {
   midnight: { accent: "#7C5CFF", background: "#0B0C10", surface: "#15171E", text: "#E8EAF0", radius: "8px" },
@@ -10,7 +10,7 @@ const PRESET_COLORS: Record<string, Pick<ThemePayload, "accent" | "background" |
   nord: { accent: "#88C0D0", background: "#2E3440", surface: "#3B4252", text: "#ECEFF4", radius: "8px" },
   rose: { accent: "#E11D48", background: "#1C1418", surface: "#2A1D22", text: "#FDE8EE", radius: "8px" },
 };
-const MODULES = ["cases", "automod", "lockdown", "reports", "notes"] as const;
+const MODULES = ["cases", "automod", "lockdown", "reports", "notes", "tickets"] as const;
 
 function EmbedPreview({ theme }: { theme: ThemePayload }) {
   return (
@@ -202,6 +202,7 @@ export default function App() {
           {detail && route.tab === "Cases" ? <Cases key={detail.id} guildId={detail.id} onError={setError} /> : null}
           {detail && route.tab === "Reports" ? <Reports key={detail.id} guildId={detail.id} onError={setError} /> : null}
           {detail && route.tab === "Notes" ? <Notes key={detail.id} guildId={detail.id} onError={setError} /> : null}
+          {detail && route.tab === "Tickets" ? <Tickets key={detail.id} guildId={detail.id} onError={setError} /> : null}
           {detail && route.tab === "Automod" ? <Automod key={detail.id} guildId={detail.id} onError={setError} /> : null}
           {detail && route.tab === "Staff" ? <Staff key={detail.id} guildId={detail.id} onError={setError} /> : null}
           {detail && route.tab === "Theme" ? (
@@ -235,6 +236,7 @@ function Overview({
 }) {
   const [timezone, setTimezone] = useState(detail.config.timezone);
   const [logChannel, setLogChannel] = useState(detail.config.log_channel_id || "");
+  const [ticketCategory, setTicketCategory] = useState(detail.config.ticket_category_id || "");
   const [timeout, setTimeoutSeconds] = useState(String(detail.config.timeout_default_seconds));
   const [toggles, setToggles] = useState(detail.config.module_toggles);
 
@@ -244,6 +246,7 @@ function Overview({
       await api.saveConfig(detail.id, {
         timezone,
         log_channel_id: logChannel,
+        ticket_category_id: ticketCategory,
         timeout_default_seconds: Number(timeout),
         module_toggles: toggles,
       });
@@ -262,6 +265,14 @@ function Overview({
       <label>
         Log channel ID
         <input value={logChannel} onChange={(event) => setLogChannel(event.target.value)} />
+      </label>
+      <label>
+        Ticket category ID
+        <input
+          value={ticketCategory}
+          placeholder="Optional category for ticket channels"
+          onChange={(event) => setTicketCategory(event.target.value)}
+        />
       </label>
       <label>
         Default timeout seconds
@@ -309,7 +320,16 @@ function Cases({ guildId, onError }: { guildId: string; onError: (message: strin
         onChange={(event) => setQuery(event.target.value)}
       />
       <p className="hint">{rows.length} shown</p>
-      <Table rows={rows} columns={["case_number", "type", "target_id", "moderator_id", "reason", "created_at"]} />
+      <Table
+        rows={rows}
+        columns={["case_number", "type", "target_id", "moderator_id", "reason", "created_at"]}
+        onDelete={(row) => {
+          api
+            .deleteCase(guildId, String(row.id))
+            .then(() => setRows((current) => current.filter((item) => item.id !== row.id)))
+            .catch((err: Error) => onError(err.message));
+        }}
+      />
     </section>
   );
 }
@@ -373,6 +393,18 @@ function Reports({ guildId, onError }: { guildId: string; onError: (message: str
                 Message
               </a>
             ) : null}
+            <button
+              className="ghost"
+              onClick={() => {
+                if (!window.confirm("Delete this report?")) return;
+                api
+                  .deleteReport(guildId, String(row.id))
+                  .then(() => setRows((current) => current.filter((item) => item.id !== row.id)))
+                  .catch((err: Error) => onError(err.message));
+              }}
+            >
+              Delete
+            </button>
           </div>
         </article>
       ))}
@@ -408,7 +440,102 @@ function Notes({ guildId, onError }: { guildId: string; onError: (message: strin
           Add note
         </button>
       </form>
-      <Table rows={rows} columns={["created_at", "author_id", "body"]} />
+      <Table
+        rows={rows}
+        columns={["created_at", "author_id", "body"]}
+        onDelete={(row) => {
+          api
+            .deleteNote(guildId, String(row.id))
+            .then(() => setRows((current) => current.filter((item) => item.id !== row.id)))
+            .catch((err: Error) => onError(err.message));
+        }}
+      />
+    </section>
+  );
+}
+
+function Tickets({ guildId, onError }: { guildId: string; onError: (message: string) => void }) {
+  const [rows, setRows] = useState<Record<string, string | number | null>[]>([]);
+  const [filter, setFilter] = useState("open");
+  const [reply, setReply] = useState<Record<string, string>>({});
+
+  function load() {
+    api
+      .tickets(guildId)
+      .then(setRows)
+      .catch((err: Error) => onError(err.message));
+  }
+
+  useEffect(() => {
+    load();
+  }, [guildId]);
+
+  const visible = rows.filter((row) => (filter === "all" ? true : row.status === filter || (filter === "open" && row.status === "claimed")));
+
+  return (
+    <section className="stack">
+      <div className="inline">
+        {["open", "closed", "all"].map((item) => (
+          <button key={item} className={filter === item ? "tab active" : "tab"} onClick={() => setFilter(item)}>
+            {item === "open" ? "Open" : item === "closed" ? "Closed" : "All"}
+          </button>
+        ))}
+      </div>
+      <p className="hint">
+        Members open a ticket with /ticket open or the panel from /ticket panel. Replies here are posted in the ticket
+        channel. Closing deletes that channel.
+      </p>
+      {visible.map((row) => (
+        <article className="card stack" key={String(row.id)}>
+          <header className="split">
+            <strong>
+              #{row.number} · {row.status}
+            </strong>
+            <span>{row.opener_id}</span>
+          </header>
+          <p>{row.subject}</p>
+          {row.status !== "closed" ? (
+            <>
+              <div className="inline">
+                <button
+                  className="ghost"
+                  onClick={() => api.claimTicket(guildId, String(row.id)).then(load).catch((err: Error) => onError(err.message))}
+                >
+                  Claim
+                </button>
+                <button
+                  className="ghost"
+                  onClick={() => api.closeTicket(guildId, String(row.id)).then(load).catch((err: Error) => onError(err.message))}
+                >
+                  Close
+                </button>
+              </div>
+              <form
+                className="inline"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const body = (reply[String(row.id)] || "").trim();
+                  if (!body) return;
+                  api
+                    .replyTicket(guildId, String(row.id), body)
+                    .then(() => setReply({ ...reply, [String(row.id)]: "" }))
+                    .catch((err: Error) => onError(err.message));
+                }}
+              >
+                <input
+                  placeholder="Reply in the ticket channel"
+                  value={reply[String(row.id)] || ""}
+                  onChange={(event) => setReply({ ...reply, [String(row.id)]: event.target.value })}
+                />
+                <button className="button" type="submit">
+                  Send
+                </button>
+              </form>
+            </>
+          ) : null}
+        </article>
+      ))}
+      {visible.length === 0 ? <p className="card">No tickets.</p> : null}
     </section>
   );
 }
@@ -663,7 +790,15 @@ function ThemeEditor({
   );
 }
 
-function Table({ rows, columns }: { rows: Record<string, unknown>[]; columns: string[] }) {
+function Table({
+  rows,
+  columns,
+  onDelete,
+}: {
+  rows: Record<string, unknown>[];
+  columns: string[];
+  onDelete?: (row: Record<string, unknown>) => void;
+}) {
   if (rows.length === 0) return <p>Nothing here yet.</p>;
   return (
     <div className="table-wrap">
@@ -673,6 +808,7 @@ function Table({ rows, columns }: { rows: Record<string, unknown>[]; columns: st
             {columns.map((column) => (
               <th key={column}>{column}</th>
             ))}
+            {onDelete ? <th></th> : null}
           </tr>
         </thead>
         <tbody>
@@ -681,6 +817,18 @@ function Table({ rows, columns }: { rows: Record<string, unknown>[]; columns: st
               {columns.map((column) => (
                 <td key={column}>{String(row[column] ?? "")}</td>
               ))}
+              {onDelete ? (
+                <td>
+                  <button
+                    className="ghost"
+                    onClick={() => {
+                      if (window.confirm("Delete this record?")) onDelete(row);
+                    }}
+                  >
+                    Delete
+                  </button>
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
