@@ -174,6 +174,18 @@ async def put_bot_settings(body: BotSettingsBody, request: Request) -> dict[str,
     return {"presence": presence, "activity_type": activity, "status_text": body.status_text.strip()}
 
 
+async def forget_api_node(node_id: str) -> None:
+    if not node_id:
+        return
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(
+            text("DELETE FROM cluster_nodes WHERE node_id = :node AND role = 'api'"),
+            {"node": node_id},
+        )
+        await session.commit()
+
+
 async def record_api_heartbeat(node_id: str) -> None:
     factory = get_session_factory()
     async with factory() as session:

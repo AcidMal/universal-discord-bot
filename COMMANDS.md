@@ -29,15 +29,15 @@ Modules can be turned off in the dashboard. A disabled module rejects its comman
 
 ### `/ping`
 
-Any member can run this. It checks the shared database, then lists every cluster node and the shards that node holds.
+Any member can run this. It checks the shared database, then lists live cluster nodes and the shards those nodes hold. Each node is its own embed. Green is healthy, yellow is delayed, red is a shard that is not connected, and gray is an unassigned shard.
+
+A node is shown only while its heartbeat is under 60 seconds old. A pod that was deleted or terminated drops off the list. A graceful shutdown removes the node immediately. A node seen in the last 20 seconds is online. Between 20 and 60 seconds it is stale.
 
 | Line | Meaning |
 | --- | --- |
 | Database | Round trip from this bot process to Postgres |
-| Node | Role (`gateway` or `api`), whether its heartbeat is online, and how long ago it was seen |
+| Node | Role (`gateway` or `api`) and how long ago the heartbeat was seen |
 | Shard | Gateway state and websocket latency. A shard this process holds is measured live |
-
-A node is online when its heartbeat is under 20 seconds old, stale under 60 seconds, and offline after that.
 
 ## Setup
 

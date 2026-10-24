@@ -185,13 +185,7 @@ async def release_leases(node_id: str) -> None:
             {"node": node_id},
         )
         await session.execute(
-            text(
-                """
-                UPDATE cluster_nodes
-                SET claimed_shards = '[]'::jsonb, last_seen = now()
-                WHERE node_id = :node
-                """
-            ),
+            text("DELETE FROM cluster_nodes WHERE node_id = :node"),
             {"node": node_id},
         )
         await session.commit()
