@@ -47,12 +47,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
   const text = await response.text();
-  const body = text ? JSON.parse(text) : null;
+  let body: unknown = null;
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      const plain = text.replace(/\s+/g, " ").trim().slice(0, 200);
+      throw new Error(plain || response.statusText || "Request failed");
+    }
+  }
   if (response.status === 401) {
     throw new Error("unauthorized");
   }
   if (!response.ok) {
-    const detail = body && typeof body.detail === "string" ? body.detail : response.statusText;
+    const detail =
+      body && typeof body === "object" && "detail" in body && typeof body.detail === "string"
+        ? body.detail
+        : response.statusText;
     throw new Error(detail || "Request failed");
   }
   return body as T;

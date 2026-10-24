@@ -38,6 +38,8 @@ spec:
           env:
             - name: API_PROXY
               value: http://api:8000
+            - name: HMR_CLIENT_PORT
+              value: "443"
           readinessProbe:
             tcpSocket:
               port: http

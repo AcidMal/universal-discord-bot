@@ -71,14 +71,17 @@ async def _accessible_guilds(session_data: dict) -> list[dict[str, Any]]:
         if guild_id not in known:
             continue
         permissions = int(guild.get("permissions") or 0)
-        access = "manager" if can_manage(permissions) else None
+        access = "manager" if guild.get("owner") or can_manage(permissions) else None
         if access is None and settings.discord_token:
-            member = await discord_request(
-                "GET",
-                f"/guilds/{guild_id}/members/{user_id}",
-                token=settings.discord_token,
-                bot=True,
-            )
+            try:
+                member = await discord_request(
+                    "GET",
+                    f"/guilds/{guild_id}/members/{user_id}",
+                    token=settings.discord_token,
+                    bot=True,
+                )
+            except HTTPException:
+                member = None
             if member:
                 role_ids = {int(role_id) for role_id in member.get("roles") or []}
                 async with factory() as session:
