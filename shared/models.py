@@ -15,7 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    text,
+    text as sql_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -37,7 +37,7 @@ def uuidv7_pk() -> Mapped[uuid.UUID]:
     return mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        server_default=text("uuidv7()"),
+        server_default=sql_text("uuidv7()"),
     )
 
 
@@ -49,12 +49,12 @@ class ClusterNode(Base):
     last_seen: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
     claimed_shards: Mapped[list[Any]] = mapped_column(
         JSONB,
         nullable=False,
-        server_default=text("'[]'::jsonb"),
+        server_default=sql_text("'[]'::jsonb"),
     )
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="gateway")
 
@@ -88,7 +88,7 @@ class BotProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
 
 
@@ -100,7 +100,7 @@ class Guild(Base):
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
     left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -125,24 +125,24 @@ class GuildConfig(Base):
     module_toggles: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
-        server_default=text(
+        server_default=sql_text(
             '\'{"cases": true, "automod": true, "lockdown": true, "reports": true, "notes": true}\'::jsonb'
         ),
     )
     ignored_channel_ids: Mapped[list[Any]] = mapped_column(
         JSONB,
         nullable=False,
-        server_default=text("'[]'::jsonb"),
+        server_default=sql_text("'[]'::jsonb"),
     )
     ignored_role_ids: Mapped[list[Any]] = mapped_column(
         JSONB,
         nullable=False,
-        server_default=text("'[]'::jsonb"),
+        server_default=sql_text("'[]'::jsonb"),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
 
     guild: Mapped[Guild] = relationship(back_populates="config")
@@ -164,7 +164,7 @@ class GuildTheme(Base):
     embed_templates: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=sql_text("'{}'::jsonb"),
     )
     background: Mapped[str] = mapped_column(String(7), nullable=False, default="#0B0C10")
     surface: Mapped[str] = mapped_column(String(7), nullable=False, default="#15171E")
@@ -174,7 +174,7 @@ class GuildTheme(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
 
     guild: Mapped[Guild] = relationship(back_populates="theme")
@@ -237,7 +237,7 @@ class Case(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
 
 
@@ -257,12 +257,12 @@ class MemberNote(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
 
 
@@ -287,7 +287,7 @@ class Report(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -307,19 +307,19 @@ class AutomodRule(Base):
     config: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=sql_text("'{}'::jsonb"),
     )
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
 
 
@@ -329,7 +329,7 @@ class ScheduledAction(Base):
         Index(
             "ix_scheduled_actions_due",
             "run_at",
-            postgresql_where=text("done_at IS NULL"),
+            postgresql_where=sql_text("done_at IS NULL"),
         ),
     )
 
@@ -348,7 +348,7 @@ class ScheduledAction(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=sql_text("'{}'::jsonb"),
     )
     run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -373,13 +373,13 @@ class AuditLog(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=sql_text("'{}'::jsonb"),
     )
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="system")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
 
 
@@ -398,7 +398,7 @@ class AutomodWindow(Base):
     window_start: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -423,7 +423,7 @@ class Lockdown(Base):
     snapshot: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=sql_text("'{}'::jsonb"),
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -474,5 +474,5 @@ class ProcessedEvent(Base):
     processed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=text("now()"),
+        server_default=sql_text("now()"),
     )
