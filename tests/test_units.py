@@ -1,6 +1,7 @@
 import unittest
 
 from bot.duration import parse_duration
+from shared.automod import describe_rule, normalize_config
 from shared.pg import asyncpg_connect_args
 from shared.theme import PRESETS, render_css_tokens, render_embed
 
@@ -17,6 +18,28 @@ class DatabaseUrlTests(unittest.TestCase):
         dsn, kwargs = asyncpg_connect_args("postgresql+asyncpg://bot:bot@postgres:5432/bot")
         self.assertEqual(dsn, "postgresql://bot:bot@postgres:5432/bot")
         self.assertEqual(kwargs, {})
+
+
+class AutomodRuleTests(unittest.TestCase):
+    def test_words_require_a_list_and_keep_whole_word(self) -> None:
+        config = normalize_config("words", "delete", {"words": "Spam, spam", "whole_word": True})
+        self.assertEqual(config["words"], ["Spam"])
+        self.assertTrue(config["whole_word"])
+        self.assertNotIn("timeout_seconds", config)
+
+    def test_timeout_gets_a_default_length(self) -> None:
+        config = normalize_config("mentions", "timeout", {"max_mentions": 4})
+        self.assertEqual(config["timeout_seconds"], 600)
+        self.assertIn("10m", describe_rule("mentions", "timeout", config))
+
+    def test_raid_rejects_delete(self) -> None:
+        with self.assertRaises(ValueError):
+            normalize_config("raid", "delete", {"max_joins": 8, "window_seconds": 10})
+
+    def test_empty_allow_list_blocks_every_link(self) -> None:
+        config = normalize_config("links", "delete", {})
+        self.assertEqual(config["allow_domains"], [])
+        self.assertIn("every link", describe_rule("links", "delete", config))
 
 
 class DurationTests(unittest.TestCase):

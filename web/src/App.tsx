@@ -1,8 +1,10 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api, applyTokens, GuildDetail, GuildSummary, ThemePayload } from "./api";
+import { AutomodPanel } from "./Automod";
 import { BotSettingsPanel, HealthPanel } from "./Status";
+import { TwitchPanel } from "./Twitch";
 
-const TABS = ["Overview", "Cases", "Reports", "Notes", "Tickets", "Automod", "Staff", "Theme"] as const;
+const TABS = ["Overview", "Server Settings", "Cases", "Reports", "Notes", "Tickets", "Automod", "Twitch", "Staff", "Theme"] as const;
 const PRESETS = ["midnight", "light", "nord", "rose", "custom"] as const;
 const PRESET_COLORS: Record<string, Pick<ThemePayload, "accent" | "background" | "surface" | "text" | "radius">> = {
   midnight: { accent: "#7C5CFF", background: "#0B0C10", surface: "#15171E", text: "#E8EAF0", radius: "8px" },
@@ -11,6 +13,42 @@ const PRESET_COLORS: Record<string, Pick<ThemePayload, "accent" | "background" |
   rose: { accent: "#E11D48", background: "#1C1418", surface: "#2A1D22", text: "#FDE8EE", radius: "8px" },
 };
 const MODULES = ["cases", "automod", "lockdown", "reports", "notes", "tickets"] as const;
+const MODULE_LABELS: Record<(typeof MODULES)[number], string> = {
+  cases: "Cases",
+  automod: "Automod",
+  lockdown: "Lockdown",
+  reports: "Reports",
+  notes: "Notes",
+  tickets: "Tickets",
+};
+
+function tabSlug(tab: string) {
+  if (tab === "Server Settings") return "settings";
+  return tab.toLowerCase();
+}
+
+function tabPath(guildId: string, tab: string) {
+  if (tab === "Overview") return `/${guildId}`;
+  return `/${guildId}/${tabSlug(tab)}`;
+}
+
+function Switch({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="switch">
+      <span>{label}</span>
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <span className="switch-track" />
+    </label>
+  );
+}
 
 function EmbedPreview({ theme }: { theme: ThemePayload }) {
   return (
@@ -67,7 +105,8 @@ function readRoute(): Route {
   if (parts[0] === "bot") return { view: "bot", guildId: "", tab: "Overview" };
   if (parts[0] === "servers") return { view: "servers", guildId: "", tab: "Overview" };
   if (parts[0] && /^\d{5,}$/.test(parts[0])) {
-    const tab = TABS.find((item) => item.toLowerCase() === (parts[1] || "").toLowerCase()) || "Overview";
+    const raw = (parts[1] || "").toLowerCase();
+    const tab = TABS.find((item) => tabSlug(item) === raw || item.toLowerCase() === raw) || "Overview";
     return { view: "servers", guildId: parts[0], tab };
   }
   return { view: "status", guildId: "", tab: "Overview" };
@@ -144,7 +183,7 @@ export default function App() {
         applyTokens(row.theme.tokens);
       })
       .catch((err: Error) => setError(err.message));
-  }, [route.guildId, username]);
+  }, [route.guildId, route.tab, username]);
 
   const showServer = Boolean(username && route.guildId);
   const query = serverQuery.trim().toLowerCase();
@@ -187,7 +226,7 @@ export default function App() {
                       key={item}
                       className={item === route.tab ? "nav active" : "nav"}
                       role="menuitem"
-                      onClick={() => go(item === "Overview" ? `/${route.guildId}` : `/${route.guildId}/${item.toLowerCase()}`)}
+                      onClick={() => go(tabPath(route.guildId, item))}
                     >
                       <span>{item}</span>
                     </button>
@@ -279,8 +318,9 @@ export default function App() {
           {route.guildId && !username ? <p className="card">Sign in to open this server.</p> : null}
           {showServer ? (
             <>
-          {detail && route.tab === "Overview" ? (
-            <Overview
+          {detail && route.tab === "Overview" ? <Overview key={detail.id} detail={detail} /> : null}
+          {detail && route.tab === "Server Settings" ? (
+            <ServerSettings
               key={detail.id}
               detail={detail}
               onSaved={() => {
@@ -294,7 +334,17 @@ export default function App() {
           {detail && route.tab === "Reports" ? <Reports key={detail.id} guildId={detail.id} onError={setError} /> : null}
           {detail && route.tab === "Notes" ? <Notes key={detail.id} guildId={detail.id} onError={setError} /> : null}
           {detail && route.tab === "Tickets" ? <Tickets key={detail.id} guildId={detail.id} onError={setError} /> : null}
-          {detail && route.tab === "Automod" ? <Automod key={detail.id} guildId={detail.id} onError={setError} /> : null}
+          {detail && route.tab === "Twitch" ? (
+            <TwitchPanel key={detail.id} guildId={detail.id} onError={setError} />
+          ) : null}
+          {detail && route.tab === "Automod" ? (
+            <AutomodPanel
+              key={detail.id}
+              detail={detail}
+              onError={setError}
+              onDetail={setDetail}
+            />
+          ) : null}
           {detail && route.tab === "Staff" ? <Staff key={detail.id} guildId={detail.id} onError={setError} /> : null}
           {detail && route.tab === "Theme" ? (
             <ThemeEditor
@@ -316,7 +366,122 @@ export default function App() {
   );
 }
 
-function Overview({
+function Overview({ detail }: { detail: GuildDetail }) {
+  const toggles = detail.config.module_toggles;
+  const setup = detail.setup || {
+    automod_rules: 0,
+    staff_roles: 0,
+    twitch_alerts: 0,
+    open_reports: 0,
+    open_tickets: 0,
+  };
+  const timeoutSeconds = detail.config.timeout_default_seconds;
+  const timeoutLabel =
+    timeoutSeconds % 3600 === 0
+      ? `${timeoutSeconds / 3600} hours`
+      : timeoutSeconds % 60 === 0
+        ? `${timeoutSeconds / 60} minutes`
+        : `${timeoutSeconds} seconds`;
+  const services = [
+    { label: "Cases", tab: "cases", on: toggles.cases !== false, detail: "Warns, timeouts, kicks, and bans" },
+    {
+      label: "Automod",
+      tab: "automod",
+      on: toggles.automod !== false,
+      detail: `${setup.automod_rules} rules on`,
+    },
+    { label: "Lockdown", tab: "settings", on: toggles.lockdown !== false, detail: "Channel lockdown from Discord" },
+    {
+      label: "Reports",
+      tab: "reports",
+      on: toggles.reports !== false,
+      detail: `${setup.open_reports} open`,
+    },
+    { label: "Notes", tab: "notes", on: toggles.notes !== false, detail: "Staff notes on members" },
+    {
+      label: "Tickets",
+      tab: "tickets",
+      on: toggles.tickets !== false,
+      detail: detail.config.ticket_category_id
+        ? `${setup.open_tickets} open · category set`
+        : `${setup.open_tickets} open · no category`,
+    },
+    {
+      label: "Twitch",
+      tab: "twitch",
+      on: setup.twitch_alerts > 0,
+      detail: setup.twitch_alerts === 1 ? "1 channel" : `${setup.twitch_alerts} channels`,
+    },
+    {
+      label: "Staff",
+      tab: "staff",
+      on: setup.staff_roles > 0,
+      detail: setup.staff_roles === 1 ? "1 role" : `${setup.staff_roles} roles`,
+    },
+    { label: "Theme", tab: "theme", on: true, detail: `${detail.theme.preset} look` },
+  ];
+
+  return (
+    <section className="stack">
+      <article className="card stack">
+        <div>
+          <p className="eyebrow">Basics</p>
+          <h2>{detail.name}</h2>
+        </div>
+        <div className="split">
+          <span className="hint">Server ID</span>
+          <strong>{detail.id}</strong>
+        </div>
+        <div className="split">
+          <span className="hint">Timezone</span>
+          <strong>{detail.config.timezone}</strong>
+        </div>
+        <div className="split">
+          <span className="hint">Language</span>
+          <strong>{detail.config.locale}</strong>
+        </div>
+        <div className="split">
+          <span className="hint">Mod log</span>
+          <strong>{detail.config.log_channel_id || "Not set"}</strong>
+        </div>
+        <div className="split">
+          <span className="hint">Ticket category</span>
+          <strong>{detail.config.ticket_category_id || "Not set"}</strong>
+        </div>
+        <div className="split">
+          <span className="hint">Default timeout</span>
+          <strong>{timeoutLabel}</strong>
+        </div>
+        <div className="split">
+          <span className="hint">Automod skips</span>
+          <strong>
+            {detail.config.ignored_channel_ids.length} channels · {detail.config.ignored_role_ids.length} roles
+          </strong>
+        </div>
+      </article>
+      <div>
+        <p className="eyebrow">Services</p>
+        <h2>What is set up</h2>
+        <div className="service-grid">
+          {services.map((service) => (
+            <article className="card stack" key={service.label}>
+              <header className="split">
+                <strong>{service.label}</strong>
+                <span className={service.on ? "pill online" : "pill offline"}>{service.on ? "on" : "off"}</span>
+              </header>
+              <p className="hint">{service.detail}</p>
+              <button className="ghost" onClick={() => go(`/${detail.id}/${service.tab}`)}>
+                Open
+              </button>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ServerSettings({
   detail,
   onSaved,
   onError,
@@ -348,7 +513,12 @@ function Overview({
   }
 
   return (
-    <form className="card" onSubmit={save}>
+    <form className="card stack" onSubmit={save}>
+      <div>
+        <p className="eyebrow">Server</p>
+        <h2>Server Settings</h2>
+        <p className="hint">Timezone, log channel, timeout, and which services are turned on.</p>
+      </div>
       <label>
         Timezone
         <input value={timezone} onChange={(event) => setTimezone(event.target.value)} />
@@ -369,20 +539,18 @@ function Overview({
         Default timeout seconds
         <input value={timeout} onChange={(event) => setTimeoutSeconds(event.target.value)} />
       </label>
-      <div className="checks">
+      <div className="switch-list">
         {MODULES.map((name) => (
-          <label key={name}>
-            <input
-              type="checkbox"
-              checked={toggles[name] !== false}
-              onChange={(event) => setToggles({ ...toggles, [name]: event.target.checked })}
-            />
-            {name}
-          </label>
+          <Switch
+            key={name}
+            label={MODULE_LABELS[name]}
+            checked={toggles[name] !== false}
+            onChange={(checked) => setToggles({ ...toggles, [name]: checked })}
+          />
         ))}
       </div>
       <button className="button" type="submit">
-        Save overview
+        Save settings
       </button>
     </form>
   );
@@ -627,110 +795,6 @@ function Tickets({ guildId, onError }: { guildId: string; onError: (message: str
         </article>
       ))}
       {visible.length === 0 ? <p className="card">No tickets.</p> : null}
-    </section>
-  );
-}
-
-function Automod({ guildId, onError }: { guildId: string; onError: (message: string) => void }) {
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [name, setName] = useState("");
-  const [type, setType] = useState("words");
-  const [action, setAction] = useState("delete");
-  const [words, setWords] = useState("");
-  const [limit, setLimit] = useState("5");
-  const [windowSeconds, setWindowSeconds] = useState("7");
-
-  function load() {
-    api
-      .rules(guildId)
-      .then(setRows)
-      .catch((err: Error) => onError(err.message));
-  }
-
-  useEffect(() => {
-    load();
-  }, [guildId]);
-
-  function config() {
-    if (type === "words") return { words: words.split(",").map((item) => item.trim()).filter(Boolean) };
-    if (type === "links") return { allow_domains: words.split(",").map((item) => item.trim()).filter(Boolean) };
-    if (type === "mentions") return { max_mentions: Number(limit) };
-    if (type === "spam") return { max_messages: Number(limit), window_seconds: Number(windowSeconds) };
-    return { max_joins: Number(limit), window_seconds: Number(windowSeconds) };
-  }
-
-  return (
-    <section className="stack">
-      <form
-        className="card stack"
-        onSubmit={(event) => {
-          event.preventDefault();
-          api
-            .addRule(guildId, { name, type, action, enabled: true, config: config() })
-            .then(load)
-            .catch((err: Error) => onError(err.message));
-        }}
-      >
-        <div className="inline">
-          <input placeholder="Rule name" value={name} onChange={(event) => setName(event.target.value)} />
-          <select value={type} onChange={(event) => setType(event.target.value)}>
-            {["words", "links", "mentions", "spam", "raid"].map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </select>
-          <select value={action} onChange={(event) => setAction(event.target.value)}>
-            {["delete", "warn", "timeout", "kick", "ban"].map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </select>
-        </div>
-        <input
-          placeholder={type === "links" ? "Allowed domains, comma separated" : "Words, comma separated"}
-          value={words}
-          onChange={(event) => setWords(event.target.value)}
-        />
-        <div className="inline">
-          <input value={limit} onChange={(event) => setLimit(event.target.value)} />
-          <input value={windowSeconds} onChange={(event) => setWindowSeconds(event.target.value)} />
-        </div>
-        <button className="button" type="submit">
-          Add rule
-        </button>
-      </form>
-      {rows.map((row) => (
-        <article className="card split" key={String(row.id)}>
-          <div>
-            <strong>{String(row.name)}</strong>
-            <p>
-              {String(row.type)} / {String(row.action)} / {row.enabled ? "on" : "off"}
-            </p>
-          </div>
-          <div className="inline">
-            <button
-              className="ghost"
-              onClick={() =>
-                api
-                  .patchRule(guildId, String(row.id), { enabled: !row.enabled })
-                  .then(load)
-                  .catch((err: Error) => onError(err.message))
-              }
-            >
-              Toggle
-            </button>
-            <button
-              className="ghost"
-              onClick={() =>
-                api
-                  .deleteRule(guildId, String(row.id))
-                  .then(load)
-                  .catch((err: Error) => onError(err.message))
-              }
-            >
-              Delete
-            </button>
-          </div>
-        </article>
-      ))}
     </section>
   );
 }

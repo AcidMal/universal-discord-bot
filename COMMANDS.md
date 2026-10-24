@@ -233,31 +233,39 @@ Restores the saved overwrites. There are no options.
 
 ## Automod
 
-`/automod` lists and toggles rules. Create and edit the rule body in the dashboard. Enabled rules are cached on each gateway node and dropped when Postgres sends `guild_invalidate`.
+Create a rule with one command, or use the same presets on the Automod page. Each command only asks for the fields that rule uses. The dashboard shows a short description of what a saved rule matches, and can edit it later.
 
-Spam and raid counts live in `automod_windows`, so two nodes agree on the same burst.
+Enabled rules are cached on each gateway node and dropped when Postgres sends `guild_invalidate`. Spam and raid counts live in `automod_windows`, so two nodes agree on the same burst.
 
-| Type | What it watches | Config |
-| --- | --- | --- |
-| `words` | Message text | `words` list, optional `whole_word` |
-| `links` | URLs and `discord.gg` invites | `allow_domains` |
-| `mentions` | User, role, and everyone mentions | `max_mentions` |
-| `spam` | Messages per user | `max_messages`, `window_seconds` |
-| `raid` | Joins | `max_joins`, `window_seconds` |
+| Command | What it watches |
+| --- | --- |
+| `/automod words` | Message text. Whole-word matching is on unless you turn it off |
+| `/automod links` | URLs and `discord.gg` invites. `allow` lists domains that stay permitted |
+| `/automod mentions` | User, role, and everyone mentions over `limit` |
+| `/automod spam` | Messages from one person inside `window` |
+| `/automod raid` | Joins inside `window`. Delete is not available, because there is no message to remove |
 
-Actions are `delete`, `warn`, `timeout`, `kick`, and `ban`. Timeout uses `timeout_seconds` in the rule config, or 10 minutes. Message rules delete the message. Warn, timeout, kick, and ban also open a case attributed to Automod.
+`action` is delete, warn, timeout, kick, or ban. Leave it empty and words, links, and mentions delete the message. Spam times the member out for 10 minutes. Raid kicks. Pass `duration` (`10m`, `2h`, `30s`) when the action is timeout.
 
-Staff with warn access, Manage Messages, or Administrator are not filtered. Channels and roles in the ignored lists are skipped.
+Warn, timeout, kick, and ban also open a case attributed to Automod. Staff with warn access, Manage Messages, or Administrator are not filtered. Channels and roles saved on the Automod page are skipped.
 
 ### `/automod list`
 
-Prints each rule id prefix, on/off, type, action, and name.
+Prints each rule name, whether it is on, what it matches, and a short id.
 
 ### `/automod toggle`
 
 | Option | Required | Meaning |
 | --- | --- | --- |
-| `rule_id` | yes | Full id, a unique prefix, or the exact rule name |
+| `rule` | yes | Exact rule name, or the short id from `/automod list` |
+
+### `/automod remove`
+
+| Option | Required | Meaning |
+| --- | --- | --- |
+| `rule` | yes | Exact rule name, or the short id from `/automod list` |
+
+Example: `/automod words name:Slurs words:slur one, slur two action:Timeout duration:10m`
 
 ## Theme
 

@@ -33,6 +33,13 @@ export type GuildDetail = {
     ignored_role_ids: string[];
   };
   theme: ThemePayload;
+  setup?: {
+    automod_rules: number;
+    staff_roles: number;
+    twitch_alerts: number;
+    open_reports: number;
+    open_tickets: number;
+  };
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -166,6 +173,18 @@ export const api = {
     request(`/api/guilds/${id}/automod/${ruleId}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteRule: (id: string, ruleId: string) =>
     request<void>(`/api/guilds/${id}/automod/${ruleId}`, { method: "DELETE" }),
+  twitch: (id: string) =>
+    request<{
+      configured: boolean;
+      alerts: { id: string; login: string; channel_id: string; enabled: boolean; live: boolean }[];
+    }>(`/api/guilds/${id}/twitch`),
+  addTwitch: (id: string, login: string, channelId: string) =>
+    request<{ login: string; note: string | null }>(`/api/guilds/${id}/twitch`, {
+      method: "POST",
+      body: JSON.stringify({ login, discord_channel_id: channelId }),
+    }),
+  deleteTwitch: (id: string, alertId: string) =>
+    request<void>(`/api/guilds/${id}/twitch/${alertId}`, { method: "DELETE" }),
   staff: (id: string) => request<Record<string, unknown>[]>(`/api/guilds/${id}/staff`),
   addStaff: (id: string, body: unknown) =>
     request(`/api/guilds/${id}/staff`, { method: "POST", body: JSON.stringify(body) }),

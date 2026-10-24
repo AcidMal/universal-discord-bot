@@ -12,10 +12,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import String, cast, or_, select
+from sqlalchemy import String, cast, func, or_, select
 
 from api.discord_api import can_manage, discord_request
 from api.security import STATE_COOKIE, clear_session, read_session, write_session
+from shared.automod import describe_rule, normalize_config
 from shared.db import get_session_factory
 from shared.enums import AuditSource, AutomodAction, AutomodRuleType, ReportStatus
 from shared.models import (
@@ -30,6 +31,8 @@ from shared.models import (
     StaffRole,
     Ticket,
     TicketMessage,
+    TwitchAlert,
+    TwitchLiveState,
 )
 from shared.services import (
     add_audit,
@@ -40,6 +43,8 @@ from shared.services import (
     upsert_staff_role,
 )
 from shared.settings import get_settings
+from shared.twitch import TwitchError, delete_eventsub, ensure_eventsub, lookup_user, twitch_configured
+from shared.twitch_format import normalize_login
 from shared.theme import EMBED_TEMPLATE_KEYS, PRESETS, render_css_tokens, render_embed
 
 router = APIRouter()
@@ -350,6 +355,11 @@ class ReportPatch(BaseModel):
     status: ReportStatus
 
 
+class TwitchAlertBody(BaseModel):
+    login: str = Field(min_length=1, max_length=80)
+    discord_channel_id: str
+
+
 @router.get("/api/guilds/{guild_id}")
 async def guild_detail(guild_id: str, request: Request) -> dict[str, Any]:
     parsed = _parse_snow(guild_id, "guild_id")
@@ -362,11 +372,39 @@ async def guild_detail(guild_id: str, request: Request) -> dict[str, Any]:
         theme = await session.get(GuildTheme, parsed)
         if guild is None or config is None or theme is None:
             raise HTTPException(status_code=404, detail="Server not found")
+
+        async def _count(statement) -> int:
+            return int(await session.scalar(statement) or 0)
+
+        setup = {
+            "automod_rules": await _count(
+                select(func.count())
+                .select_from(AutomodRule)
+                .where(AutomodRule.guild_id == parsed, AutomodRule.enabled.is_(True))
+            ),
+            "staff_roles": await _count(
+                select(func.count()).select_from(StaffRole).where(StaffRole.guild_id == parsed)
+            ),
+            "twitch_alerts": await _count(
+                select(func.count()).select_from(TwitchAlert).where(TwitchAlert.guild_id == parsed)
+            ),
+            "open_reports": await _count(
+                select(func.count())
+                .select_from(Report)
+                .where(Report.guild_id == parsed, Report.status.in_(("open", "claimed")))
+            ),
+            "open_tickets": await _count(
+                select(func.count())
+                .select_from(Ticket)
+                .where(Ticket.guild_id == parsed, Ticket.status != "closed")
+            ),
+        }
         return {
             "id": str(guild.id),
             "name": guild.name,
             "config": _config_out(config),
             "theme": _theme_out(theme),
+            "setup": setup,
             "actor": str(session_data["user_id"]),
         }
 
@@ -840,6 +878,26 @@ async def reply_ticket(guild_id: str, ticket_id: str, body: TicketReply, request
         await session.commit()
 
 
+def _rule_payload(row: AutomodRule) -> dict[str, Any]:
+    config = dict(row.config or {})
+    return {
+        "id": str(row.id),
+        "name": row.name,
+        "type": row.type,
+        "action": row.action,
+        "enabled": row.enabled,
+        "config": config,
+        "summary": describe_rule(row.type, row.action, config),
+    }
+
+
+def _clean_rule(rule_type: str, action: str, raw: dict[str, Any] | None) -> dict[str, Any]:
+    try:
+        return normalize_config(rule_type, action, raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/api/guilds/{guild_id}/automod")
 async def list_rules(guild_id: str, request: Request) -> list[dict[str, Any]]:
     parsed = _parse_snow(guild_id, "guild_id")
@@ -854,17 +912,7 @@ async def list_rules(guild_id: str, request: Request) -> list[dict[str, Any]]:
                 )
             ).all()
         )
-        return [
-            {
-                "id": str(row.id),
-                "name": row.name,
-                "type": row.type,
-                "action": row.action,
-                "enabled": row.enabled,
-                "config": dict(row.config or {}),
-            }
-            for row in rows
-        ]
+        return [_rule_payload(row) for row in rows]
 
 
 @router.post("/api/guilds/{guild_id}/automod")
@@ -880,18 +928,11 @@ async def create_rule(guild_id: str, body: RuleBody, request: Request) -> dict[s
             type=body.type,
             action=body.action,
             enabled=body.enabled,
-            config=body.config,
+            config=_clean_rule(body.type, body.action, body.config),
         )
         session.add(row)
         await session.flush()
-        payload = {
-            "id": str(row.id),
-            "name": row.name,
-            "type": row.type,
-            "action": row.action,
-            "enabled": row.enabled,
-            "config": row.config,
-        }
+        payload = _rule_payload(row)
         await add_audit(
             session,
             guild_id=parsed,
@@ -921,13 +962,17 @@ async def patch_rule(guild_id: str, rule_id: str, body: RulePatch, request: Requ
         if row is None or row.guild_id != parsed:
             raise HTTPException(status_code=404, detail="Rule not found")
         if body.name is not None:
-            row.name = body.name.strip()[:100]
-        if body.action is not None:
-            row.action = body.action
+            cleaned_name = body.name.strip()[:100]
+            if not cleaned_name:
+                raise HTTPException(status_code=422, detail="Give the rule a name.")
+            row.name = cleaned_name
         if body.enabled is not None:
             row.enabled = body.enabled
-        if body.config is not None:
-            row.config = body.config
+        if body.action is not None or body.config is not None:
+            action = body.action or row.action
+            raw = body.config if body.config is not None else dict(row.config or {})
+            row.action = action
+            row.config = _clean_rule(row.type, action, raw)
         row.updated_at = datetime.now(timezone.utc)
         await add_audit(
             session,
@@ -939,14 +984,7 @@ async def patch_rule(guild_id: str, rule_id: str, body: RulePatch, request: Requ
         )
         await notify_guild(session, parsed)
         await session.commit()
-        return {
-            "id": str(row.id),
-            "name": row.name,
-            "type": row.type,
-            "action": row.action,
-            "enabled": row.enabled,
-            "config": row.config,
-        }
+        return _rule_payload(row)
 
 
 @router.delete("/api/guilds/{guild_id}/automod/{rule_id}")
@@ -974,6 +1012,110 @@ async def delete_rule(guild_id: str, rule_id: str, request: Request) -> Response
         )
         await notify_guild(session, parsed)
         await session.commit()
+    return Response(status_code=204)
+
+
+@router.get("/api/guilds/{guild_id}/twitch")
+async def list_twitch(guild_id: str, request: Request) -> dict[str, Any]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    await _require_guild(request, parsed)
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(TwitchAlert, TwitchLiveState.live)
+                .outerjoin(TwitchLiveState, TwitchLiveState.broadcaster_id == TwitchAlert.twitch_user_id)
+                .where(TwitchAlert.guild_id == parsed)
+                .order_by(TwitchAlert.twitch_login)
+            )
+        ).all()
+    alerts = [
+        {
+            "id": str(alert.id),
+            "login": alert.twitch_login,
+            "channel_id": str(alert.discord_channel_id),
+            "enabled": alert.enabled,
+            "live": bool(live),
+        }
+        for alert, live in rows
+    ]
+    return {"configured": twitch_configured(), "alerts": alerts}
+
+
+@router.post("/api/guilds/{guild_id}/twitch")
+async def add_twitch(guild_id: str, body: TwitchAlertBody, request: Request) -> dict[str, Any]:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    await _require_guild(request, parsed)
+    if not twitch_configured():
+        raise HTTPException(status_code=424, detail="Twitch is not configured on this bot.")
+    try:
+        login = normalize_login(body.login)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    channel_id = _parse_snow(body.discord_channel_id, "discord_channel_id")
+    if channel_id is None:
+        raise HTTPException(status_code=422, detail="Choose a Discord channel.")
+    try:
+        profile = await lookup_user(login)
+    except TwitchError as exc:
+        raise HTTPException(status_code=424, detail=str(exc)) from exc
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.scalar(
+            select(TwitchAlert).where(
+                TwitchAlert.guild_id == parsed,
+                TwitchAlert.twitch_user_id == profile["id"],
+            )
+        )
+        if row is None:
+            row = TwitchAlert(
+                guild_id=parsed,
+                discord_channel_id=channel_id,
+                twitch_login=profile["login"],
+                twitch_user_id=profile["id"],
+                enabled=True,
+            )
+            session.add(row)
+        else:
+            row.discord_channel_id = channel_id
+            row.twitch_login = profile["login"]
+            row.enabled = True
+        await session.flush()
+        alert_id = str(row.id)
+        await session.commit()
+    note = await ensure_eventsub(profile["id"])
+    return {
+        "id": alert_id,
+        "login": profile["login"],
+        "channel_id": str(channel_id),
+        "enabled": True,
+        "live": False,
+        "note": note,
+    }
+
+
+@router.delete("/api/guilds/{guild_id}/twitch/{alert_id}", status_code=204)
+async def delete_twitch(guild_id: str, alert_id: str, request: Request) -> Response:
+    parsed = _parse_snow(guild_id, "guild_id")
+    assert parsed is not None
+    await _require_guild(request, parsed)
+    alert_uuid = _parse_uuid(alert_id, "alert_id")
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.get(TwitchAlert, alert_uuid)
+        if row is None or row.guild_id != parsed:
+            raise HTTPException(status_code=404, detail="Twitch alert not found")
+        broadcaster_id = row.twitch_user_id
+        await session.delete(row)
+        await session.flush()
+        remaining = await session.scalar(
+            select(func.count()).select_from(TwitchAlert).where(TwitchAlert.twitch_user_id == broadcaster_id)
+        )
+        await session.commit()
+    if not remaining and twitch_configured():
+        await delete_eventsub(broadcaster_id)
     return Response(status_code=204)
 
 

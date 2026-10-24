@@ -266,11 +266,14 @@ Put your Discord user ID in `BOT_ADMIN_IDS` to unlock **Bot** after you sign in.
 
 | Tab | What it edits |
 | --- | --- |
-| Overview | Timezone, log channel id, default timeout, module toggles |
+| Overview | How the server is set up: basics and which services are on |
+| Server Settings | Timezone, log channel, timeout, and module switches |
 | Cases | Search by user id |
 | Reports | Claim, resolve, reject |
 | Notes | Staff notes by user id |
-| Automod | Create, toggle, and delete rules |
+| Tickets | Claim, reply, and close |
+| Automod | Create, edit, toggle, and delete rules |
+| Twitch | Live alerts for Twitch channels |
 | Staff | Role ids allowed to warn, timeout, kick, and ban |
 | Theme | Presets, colors, footer, author, logo, live embed preview |
 
