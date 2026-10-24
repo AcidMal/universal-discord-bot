@@ -126,7 +126,15 @@ docker compose down
 
 ## Deploy on Kubernetes
 
-Point `kubectl` at the cluster, then run one script. It reads the Discord settings already in `.env`, asks for the public dashboard URL once, and saves that answer in `deploy/kubernetes/cluster.env`.
+You need Docker, `kubectl`, and `kubectl config current-context` pointed at the cluster you want. The script creates Postgres, the API, the bot, and the dashboard. On a remote cluster it publishes images for both `linux/amd64` and `linux/arm64`, so Intel and ARM nodes pull the matching build.
+
+### 1. Create a GitHub token
+
+Skip this step for Docker Desktop, kind, minikube, or k3d. Those clusters use the image on your machine.
+
+For any other cluster, open GitHub → **Settings → Developer settings → Personal access tokens → Tokens (classic)** and create a token with the **write:packages** scope. It starts with `ghp_`. Copy it. The script asks for it once and stores it in `deploy/kubernetes/cluster.env`, which is not committed.
+
+### 2. Run the script
 
 macOS, Linux, WSL, or Git Bash:
 
@@ -141,28 +149,34 @@ Windows PowerShell:
 .\deploy-k8s.ps1
 ```
 
-The script shows the current kubectl context before it changes anything. It creates the namespace, the database password, the app Secret, and the Ingress host from that URL. `/api`, `/auth`, `/health`, and `/twitch` go to the API. Everything else goes to the dashboard. Postgres 18.1 stays inside the cluster on a 5Gi volume, and the same password is reused on the next run.
+### 3. Answer the questions
 
-Docker Desktop, kind, minikube, and k3d build the images straight into that cluster. Any other context is treated as a remote cluster: the script builds the three app images, pushes them to `ghcr.io/acidmal`, and creates a pull secret. The GitHub token needs `write:packages` and `read:packages`. It is saved in `cluster.env` and is not committed.
+- Discord bot token, client ID, and client secret, if `.env` does not already have them
+- Dashboard URL, such as `https://bot.example.com`. This becomes the Ingress host. Use `https://` when you want Twitch go-live alerts.
+- The GitHub token from step 1, on a remote cluster
+
+It prints the cluster name and waits for you to confirm. Postgres keeps the same password on later runs.
+
+### 4. Finish Discord setup
+
+The script prints an OAuth redirect and an invite link.
+
+1. In the Discord Developer Portal, add that redirect under **OAuth2 → Redirects**
+2. Under **Bot**, turn on **Message Content Intent** and **Server Members Intent**
+3. Open the dashboard URL
+4. Open the invite link and add the bot to a server, then run `/setup` there
+
+### 5. Check that it is up
 
 ```bash
-./deploy-k8s.sh --replicas 2
-./deploy-k8s.sh --no-build
-./deploy-k8s.sh --local
-./deploy-k8s.sh --remote
-./deploy-k8s.sh --noninteractive
-```
-
-`--replicas` is only useful once Discord assigns more than one shard. `--no-build` reuses images that are already built or pushed. `--local` and `--remote` override the context guess. `--noninteractive` reads `.env` and `cluster.env` and does not prompt.
-
-When it finishes, save the printed OAuth redirect in the Discord application. The dashboard URL has to be the hostname that reaches the Ingress, with `https://` when Twitch instant alerts are on.
-
-```bash
-kubectl logs -n universal-discord-bot -l app=bot -f
+kubectl get pods -n universal-discord-bot
 kubectl logs -n universal-discord-bot -l app=api -f
+kubectl logs -n universal-discord-bot -l app=bot -f
 ```
 
-Run `./deploy-k8s.sh` again after changing `.env` or `cluster.env`. To use a Postgres server you already run, set `DATABASE_URL` in `cluster.env` and the script will skip the in-cluster database.
+`api` and `bot` should become `Running`. The API log ends after migrations. The bot log shows the shards it claimed.
+
+Run `./deploy-k8s.sh` again after you change `.env` or `cluster.env`. Add `--replicas 2` only after Discord assigns more than one shard. Add `--no-build` to skip rebuilding images.
 
 ## Configuration
 

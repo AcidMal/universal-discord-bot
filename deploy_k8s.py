@@ -20,11 +20,13 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 NAMESPACE = "universal-discord-bot"
-IMAGES = (
-    "ghcr.io/acidmal/universal-discord-bot-api:latest",
-    "ghcr.io/acidmal/universal-discord-bot-bot:latest",
-    "ghcr.io/acidmal/universal-discord-bot-web:latest",
+IMAGE_BUILDS = (
+    ("ghcr.io/acidmal/universal-discord-bot-api:latest", "docker/Dockerfile.api"),
+    ("ghcr.io/acidmal/universal-discord-bot-bot:latest", "docker/Dockerfile.bot"),
+    ("ghcr.io/acidmal/universal-discord-bot-web:latest", "docker/Dockerfile.web"),
 )
+IMAGES = tuple(image for image, _dockerfile in IMAGE_BUILDS)
+PLATFORMS = "linux/amd64,linux/arm64"
 GHCR_USER = "acidmal"
 
 
@@ -320,110 +322,78 @@ def ingress_class() -> str | None:
     return None
 
 
-def format_patch(ops: list[dict]) -> str:
-    rows: list[str] = []
-    for op in ops:
-        rows.append(f"- op: {op['op']}")
-        rows.append(f"  path: {json.dumps(op['path'])}")
-        if "value" in op:
-            rows.append("  value: " + json.dumps(op["value"]))
-    return "\n".join(rows)
+def usable_token(token: str) -> bool:
+    value = token.strip()
+    return value.startswith(("ghp_", "github_pat_")) and " " not in value and "/" not in value
 
 
-def write_overlay(
-    *,
-    host: str,
-    ingress: str | None,
-    remote: bool,
-    replicas: int,
-    external_db: bool,
-) -> Path:
-    directory = ROOT / "deploy" / "kubernetes" / ".generated"
-    directory.mkdir(parents=True, exist_ok=True)
-    resources = [
-        "../namespace.yaml",
-        "../api.yaml",
-        "../bot.yaml",
-        "../web.yaml",
-        "../ingress.yaml",
-    ]
+def apply_workloads(*, external_db: bool) -> None:
+    names = ["namespace.yaml", "api.yaml", "bot.yaml", "web.yaml", "ingress.yaml"]
     if not external_db:
-        resources.insert(1, "../postgres.yaml")
-    ingress_ops: list[dict] = [{"op": "replace", "path": "/spec/rules/0/host", "value": host}]
+        names.insert(1, "postgres.yaml")
+    folder = ROOT / "deploy" / "kubernetes"
+    for name in names:
+        kubectl("apply", "-f", str(folder / name))
+
+
+def patch_ingress(host: str, ingress: str | None) -> None:
+    ops: list[dict] = [{"op": "replace", "path": "/spec/rules/0/host", "value": host}]
     if ingress:
-        ingress_ops.append({"op": "replace", "path": "/spec/ingressClassName", "value": ingress})
+        ops.append({"op": "replace", "path": "/spec/ingressClassName", "value": ingress})
     else:
-        ingress_ops.append({"op": "remove", "path": "/spec/ingressClassName"})
-    patches = [{"target": {"kind": "Ingress", "name": "web"}, "patch": format_patch(ingress_ops)}]
-    if remote:
-        patches.append(
-            {
-                "target": {"kind": "Deployment"},
-                "patch": format_patch(
-                    [
-                        {
-                            "op": "add",
-                            "path": "/spec/template/spec/imagePullSecrets",
-                            "value": [{"name": "ghcr"}],
-                        },
-                        {
-                            "op": "replace",
-                            "path": "/spec/template/spec/containers/0/imagePullPolicy",
-                            "value": "Always",
-                        },
-                    ]
-                ),
-            }
-        )
-        patches.append(
-            {
-                "target": {"kind": "Deployment", "name": "bot"},
-                "patch": format_patch(
-                    [
-                        {
-                            "op": "replace",
-                            "path": "/spec/template/spec/initContainers/0/imagePullPolicy",
-                            "value": "Always",
-                        }
-                    ]
-                ),
-            }
-        )
-    lines = [
-        "apiVersion: kustomize.config.k8s.io/v1beta1",
-        "kind: Kustomization",
-        "resources:",
-    ]
-    lines.extend(f"  - {item}" for item in resources)
-    lines.extend(
-        [
-            "replicas:",
-            "  - name: bot",
-            f"    count: {replicas}",
-            "patches:",
-        ]
+        ops.append({"op": "remove", "path": "/spec/ingressClassName"})
+    kubectl(
+        "patch",
+        "ingress",
+        "web",
+        "-n",
+        NAMESPACE,
+        "--type=json",
+        f"-p={json.dumps(ops)}",
     )
-    for patch in patches:
-        lines.append("  - target:")
-        for key, value in patch["target"].items():
-            lines.append(f"      {key}: {value}")
-        lines.append("    patch: |-")
-        for row in str(patch["patch"]).splitlines():
-            lines.append(f"      {row}")
-    path = directory / "kustomization.yaml"
-    path.write_text("\n".join(lines) + "\n")
-    return directory
+
+
+def patch_remote_pull() -> None:
+    for name in ("api", "bot", "web"):
+        spec: dict = {
+            "imagePullSecrets": [{"name": "ghcr"}],
+            "containers": [{"name": name, "imagePullPolicy": "Always"}],
+        }
+        if name == "bot":
+            spec["initContainers"] = [{"name": "wait-for-api", "imagePullPolicy": "Always"}]
+        kubectl(
+            "patch",
+            "deployment",
+            name,
+            "-n",
+            NAMESPACE,
+            "--type=strategic",
+            f"-p={json.dumps({'spec': {'template': {'spec': spec}}})}",
+        )
+
+
+def ensure_buildx() -> None:
+    inspect = subprocess.run(["docker", "buildx", "inspect", "udb"], capture_output=True, text=True)
+    if inspect.returncode != 0:
+        run(["docker", "buildx", "create", "--name", "udb", "--driver", "docker-container", "--use"])
+    else:
+        run(["docker", "buildx", "use", "udb"])
+    run(["docker", "buildx", "inspect", "udb", "--bootstrap"])
 
 
 def prepare_images(*, remote: bool, no_build: bool, context: str, username: str, token: str) -> None:
     if no_build:
         print("Skipping image build.")
         return
-    compose = compose_cmd()
     info = subprocess.run(["docker", "info"], capture_output=True, text=True)
     if info.returncode != 0:
         raise SystemExit("Docker is installed but the daemon is not running.")
     if remote:
+        if not usable_token(token):
+            raise SystemExit(
+                "GHCR_TOKEN in deploy/kubernetes/cluster.env is not a GitHub token. "
+                "Replace it with a classic token that starts with ghp_ and has write:packages."
+            )
         print("+ docker login ghcr.io", flush=True)
         login = subprocess.run(
             ["docker", "login", "ghcr.io", "-u", username, "--password-stdin"],
@@ -433,11 +403,30 @@ def prepare_images(*, remote: bool, no_build: bool, context: str, username: str,
         )
         if login.returncode != 0:
             sys.stderr.write(login.stderr or login.stdout)
-            raise SystemExit("Docker login to ghcr.io failed.")
-    run([*compose, "build", "api", "bot", "web"], cwd=ROOT)
-    if remote:
-        run([*compose, "push", "api", "bot", "web"], cwd=ROOT)
+            raise SystemExit("Docker login to ghcr.io failed. Use a classic GitHub token (ghp_) with write:packages.")
+        ensure_buildx()
+        for image, dockerfile in IMAGE_BUILDS:
+            run(
+                [
+                    "docker",
+                    "buildx",
+                    "build",
+                    "--platform",
+                    PLATFORMS,
+                    "--provenance=false",
+                    "--sbom=false",
+                    "-f",
+                    dockerfile,
+                    "-t",
+                    image,
+                    "--push",
+                    ".",
+                ],
+                cwd=ROOT,
+            )
         return
+    compose = compose_cmd()
+    run([*compose, "build", "api", "bot", "web"], cwd=ROOT)
     if context.startswith("kind-"):
         ensure_tool("kind")
         name = context.removeprefix("kind-")
@@ -490,17 +479,20 @@ def main() -> None:
     host = public_host(public_url)
     username = cluster.get("GHCR_USERNAME") or GHCR_USER
 
-    if remote and not cluster.get("GHCR_TOKEN"):
+    if remote and not usable_token(cluster.get("GHCR_TOKEN")):
         if args.noninteractive:
-            raise SystemExit("Set GHCR_TOKEN in deploy/kubernetes/cluster.env. It needs write:packages and read:packages.")
-        token = prompt("GitHub token for ghcr.io (write:packages and read:packages)", secret=True)
-        if not token:
-            raise SystemExit("A GitHub token is required so the cluster can pull the images.")
-        cluster.set("GHCR_TOKEN", token)
+            raise SystemExit(
+                "Set GHCR_TOKEN in deploy/kubernetes/cluster.env to a classic GitHub token "
+                "(ghp_) with write:packages."
+            )
+        token = prompt("GitHub classic token for ghcr.io (starts with ghp_, scope write:packages)", secret=True)
+        if not usable_token(token):
+            raise SystemExit("That is not a GitHub token. Create a classic token at GitHub Settings → Developer settings.")
+        cluster.set("GHCR_TOKEN", token.strip())
         cluster.save(0o600)
 
     image_plan = "use the images already in ghcr.io" if args.no_build else (
-        "build and push to ghcr.io/acidmal" if remote else "build into this local cluster"
+        "build linux/amd64 and linux/arm64, then push to ghcr.io/acidmal" if remote else "build into this local cluster"
     )
     print()
     print("Deploy universal-discord-bot")
@@ -541,14 +533,11 @@ def main() -> None:
         print(f"Using Ingress class {chosen_ingress}")
     else:
         print("No Ingress class found. The dashboard Service is still created.")
-    overlay = write_overlay(
-        host=host,
-        ingress=chosen_ingress,
-        remote=remote,
-        replicas=args.replicas,
-        external_db=bool(cluster.get("DATABASE_URL")),
-    )
-    kubectl("apply", "-k", str(overlay))
+    apply_workloads(external_db=bool(cluster.get("DATABASE_URL")))
+    patch_ingress(host, chosen_ingress)
+    if remote:
+        patch_remote_pull()
+    kubectl("scale", "deployment/bot", "-n", NAMESPACE, f"--replicas={args.replicas}")
     if not cluster.get("DATABASE_URL"):
         rollout("postgres", "statefulset")
     for name in ("api", "bot", "web"):
