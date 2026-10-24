@@ -26,18 +26,40 @@ function EmbedPreview({ theme }: { theme: ThemePayload }) {
   );
 }
 
-type View = "status" | "servers" | "bot";
+type Tab = (typeof TABS)[number];
+type Route = { view: "status" | "servers" | "bot"; guildId: string; tab: Tab };
+
+function readRoute(): Route {
+  const parts = window.location.pathname.split("/").filter(Boolean);
+  if (parts[0] === "bot") return { view: "bot", guildId: "", tab: "Overview" };
+  if (parts[0] && /^\d{5,}$/.test(parts[0])) {
+    const tab = TABS.find((item) => item.toLowerCase() === (parts[1] || "").toLowerCase()) || "Overview";
+    return { view: "servers", guildId: parts[0], tab };
+  }
+  return { view: "status", guildId: "", tab: "Overview" };
+}
+
+function go(path: string) {
+  if (window.location.pathname === path) return;
+  window.history.pushState(null, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
 
 export default function App() {
   const [username, setUsername] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [view, setView] = useState<View>("status");
+  const [route, setRoute] = useState<Route>(readRoute);
   const [guilds, setGuilds] = useState<GuildSummary[]>([]);
-  const [guildId, setGuildId] = useState<string>("");
+  const [serverQuery, setServerQuery] = useState("");
   const [detail, setDetail] = useState<GuildDetail | null>(null);
-  const [tab, setTab] = useState<(typeof TABS)[number]>("Overview");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    const onPop = () => setRoute(readRoute());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   useEffect(() => {
     api
@@ -45,9 +67,7 @@ export default function App() {
       .then(async (user) => {
         setUsername(user.username);
         setIsAdmin(user.is_admin);
-        const rows = await api.guilds();
-        setGuilds(rows);
-        if (rows[0]) setGuildId(rows[0].id);
+        setGuilds(await api.guilds());
       })
       .catch((err: Error) => {
         if (err.message !== "unauthorized") setError(err.message);
@@ -55,36 +75,46 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!guildId) return;
+    if (!route.guildId || !username) {
+      setDetail(null);
+      return;
+    }
     setError("");
     api
-      .guild(guildId)
+      .guild(route.guildId)
       .then((row) => {
         setDetail(row);
         applyTokens(row.theme.tokens);
       })
       .catch((err: Error) => setError(err.message));
-  }, [guildId]);
+  }, [route.guildId, username]);
 
-  const showServers = username && view === "servers";
+  const showServers = Boolean(username && route.view === "servers" && route.guildId);
+  const query = serverQuery.trim().toLowerCase();
+  const visibleGuilds = guilds.filter(
+    (guild) => !query || guild.name.toLowerCase().includes(query) || guild.id.includes(query),
+  );
+  const groups = [
+    { label: "Managers", access: "manager" },
+    { label: "Staff", access: "staff" },
+  ]
+    .map((group) => ({ ...group, guilds: visibleGuilds.filter((guild) => guild.access === group.access) }))
+    .filter((group) => group.guilds.length > 0);
+  const title =
+    route.view === "status" ? "Live status" : route.view === "bot" ? "Bot settings" : detail?.name || "Server";
 
   return (
     <div className="shell">
       <header>
         <div>
           <p className="eyebrow">Moderation</p>
-          <strong>
-            {view === "status" ? "Live status" : view === "bot" ? "Bot settings" : detail?.name || "Select a server"}
-          </strong>
+          <strong className="page-title">{title}</strong>
         </div>
         <div className="header-actions">
           {username ? (
             <>
-              <span>{username}</span>
-              <button
-                className="ghost"
-                onClick={() => api.logout().then(() => window.location.assign("/"))}
-              >
+              <span className="who">{username}</span>
+              <button className="ghost" onClick={() => api.logout().then(() => window.location.assign("/"))}>
                 Sign out
               </button>
             </>
@@ -97,53 +127,68 @@ export default function App() {
       </header>
       <div className="layout">
         <aside>
-          <button className={view === "status" ? "nav active" : "nav"} onClick={() => setView("status")}>
+          <button className={route.view === "status" ? "nav active" : "nav"} onClick={() => go("/")}>
             <span>Status</span>
             <small>public</small>
           </button>
           {isAdmin ? (
-            <button className={view === "bot" ? "nav active" : "nav"} onClick={() => setView("bot")}>
+            <button className={route.view === "bot" ? "nav active" : "nav"} onClick={() => go("/bot")}>
               <span>Bot</span>
               <small>admin</small>
             </button>
           ) : null}
           {username ? (
-            guilds.length === 0 ? (
-              <p>No servers yet. Invite the bot, then refresh.</p>
-            ) : (
-              guilds.map((guild) => (
-                <button
-                  key={guild.id}
-                  className={showServers && guild.id === guildId ? "nav active" : "nav"}
-                  onClick={() => {
-                    setGuildId(guild.id);
-                    setView("servers");
-                  }}
-                >
-                  <span>{guild.name}</span>
-                  <small>{guild.access}</small>
-                </button>
-              ))
-            )
+            <>
+              <input
+                className="search"
+                placeholder="Search servers"
+                value={serverQuery}
+                onChange={(event) => setServerQuery(event.target.value)}
+              />
+              {guilds.length === 0 ? <p className="hint">No servers yet. Invite the bot, then refresh.</p> : null}
+              {guilds.length > 0 && groups.length === 0 ? <p className="hint">No servers match.</p> : null}
+              {groups.map((group) => (
+                <div className="group" key={group.access}>
+                  <p className="group-label">{group.label}</p>
+                  {group.guilds.map((guild) => (
+                    <button
+                      key={guild.id}
+                      className={showServers && guild.id === route.guildId ? "nav active" : "nav"}
+                      onClick={() => go(`/${guild.id}`)}
+                    >
+                      <span>{guild.name}</span>
+                      <small>{guild.access}</small>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </>
           ) : (
-            <p>Sign in with Discord to edit server settings.</p>
+            <p className="hint">Sign in with Discord to edit server settings.</p>
           )}
         </aside>
         <main>
           {error ? <p className="error">{error}</p> : null}
           {notice ? <p className="notice">{notice}</p> : null}
-          {view === "status" ? <HealthPanel /> : null}
-          {view === "bot" && isAdmin ? <BotSettingsPanel onSaved={setNotice} /> : null}
+          {route.view === "status" ? <HealthPanel /> : null}
+          {route.view === "bot" && isAdmin ? <BotSettingsPanel onSaved={setNotice} /> : null}
+          {route.view === "servers" && !username ? (
+            <p className="card">Sign in to open this server.</p>
+          ) : null}
           {showServers ? (
             <>
           <nav className="tabs">
             {TABS.map((item) => (
-              <button key={item} className={item === tab ? "tab active" : "tab"} onClick={() => setTab(item)}>
+              <button
+                key={item}
+                className={item === route.tab ? "tab active" : "tab"}
+                onClick={() => go(item === "Overview" ? `/${route.guildId}` : `/${route.guildId}/${item.toLowerCase()}`)}
+              >
                 {item}
               </button>
             ))}
           </nav>
-          {detail && tab === "Overview" ? (
+          {detail && route.tab === "Overview" ? (
             <Overview
               key={detail.id}
               detail={detail}
@@ -154,12 +199,12 @@ export default function App() {
               onError={setError}
             />
           ) : null}
-          {detail && tab === "Cases" ? <Cases key={detail.id} guildId={detail.id} onError={setError} /> : null}
-          {detail && tab === "Reports" ? <Reports key={detail.id} guildId={detail.id} onError={setError} /> : null}
-          {detail && tab === "Notes" ? <Notes key={detail.id} guildId={detail.id} onError={setError} /> : null}
-          {detail && tab === "Automod" ? <Automod key={detail.id} guildId={detail.id} onError={setError} /> : null}
-          {detail && tab === "Staff" ? <Staff key={detail.id} guildId={detail.id} onError={setError} /> : null}
-          {detail && tab === "Theme" ? (
+          {detail && route.tab === "Cases" ? <Cases key={detail.id} guildId={detail.id} onError={setError} /> : null}
+          {detail && route.tab === "Reports" ? <Reports key={detail.id} guildId={detail.id} onError={setError} /> : null}
+          {detail && route.tab === "Notes" ? <Notes key={detail.id} guildId={detail.id} onError={setError} /> : null}
+          {detail && route.tab === "Automod" ? <Automod key={detail.id} guildId={detail.id} onError={setError} /> : null}
+          {detail && route.tab === "Staff" ? <Staff key={detail.id} guildId={detail.id} onError={setError} /> : null}
+          {detail && route.tab === "Theme" ? (
             <ThemeEditor
               key={detail.id}
               detail={detail}
@@ -243,47 +288,35 @@ function Overview({
 
 function Cases({ guildId, onError }: { guildId: string; onError: (message: string) => void }) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [target, setTarget] = useState("");
-
-  function load(targetId?: string) {
-    api
-      .cases(guildId, targetId)
-      .then(setRows)
-      .catch((err: Error) => onError(err.message));
-  }
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
-    load();
-  }, [guildId]);
+    const handle = window.setTimeout(() => {
+      api
+        .cases(guildId, query.trim())
+        .then(setRows)
+        .catch((err: Error) => onError(err.message));
+    }, 200);
+    return () => window.clearTimeout(handle);
+  }, [guildId, query, onError]);
 
   return (
     <section className="card">
-      <form
-        className="inline"
-        onSubmit={(event) => {
-          event.preventDefault();
-          load(target.trim() || undefined);
-        }}
-      >
-        <input
-          placeholder="Filter by user ID"
-          value={target}
-          onChange={(event) => setTarget(event.target.value)}
-        />
-        <button className="button" type="submit">
-          Search
-        </button>
-      </form>
-      <Table
-        rows={rows}
-        columns={["case_number", "type", "target_id", "reason", "created_at"]}
+      <input
+        className="search"
+        placeholder="Search case number, type, user, moderator, or reason"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
       />
+      <p className="hint">{rows.length} shown</p>
+      <Table rows={rows} columns={["case_number", "type", "target_id", "moderator_id", "reason", "created_at"]} />
     </section>
   );
 }
 
 function Reports({ guildId, onError }: { guildId: string; onError: (message: string) => void }) {
   const [rows, setRows] = useState<Record<string, string | null>[]>([]);
+  const [query, setQuery] = useState("");
 
   function load() {
     api
@@ -296,9 +329,23 @@ function Reports({ guildId, onError }: { guildId: string; onError: (message: str
     load();
   }, [guildId]);
 
+  const needle = query.trim().toLowerCase();
+  const visible = rows.filter((row) => {
+    if (!needle) return true;
+    return [row.status, row.target_id, row.reason, row.reporter_id].some((value) =>
+      String(value || "").toLowerCase().includes(needle),
+    );
+  });
+
   return (
     <section className="stack">
-      {rows.map((row) => (
+      <input
+        className="search"
+        placeholder="Search reports"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+      {visible.map((row) => (
         <article className="card" key={String(row.id)}>
           <header className="split">
             <strong>
@@ -329,7 +376,7 @@ function Reports({ guildId, onError }: { guildId: string; onError: (message: str
           </div>
         </article>
       ))}
-      {rows.length === 0 ? <p className="card">No reports.</p> : null}
+      {visible.length === 0 ? <p className="card">No reports.</p> : null}
     </section>
   );
 }

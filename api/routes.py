@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import String, cast, or_, select
 
 from api.discord_api import can_manage, discord_request
 from api.security import STATE_COOKIE, clear_session, read_session, write_session
@@ -466,16 +466,33 @@ async def put_theme(guild_id: str, body: ThemePatch, request: Request) -> dict[s
 
 
 @router.get("/api/guilds/{guild_id}/cases")
-async def list_cases(guild_id: str, request: Request, target_id: str | None = None) -> list[dict[str, Any]]:
+async def list_cases(
+    guild_id: str,
+    request: Request,
+    target_id: str | None = None,
+    q: str | None = None,
+) -> list[dict[str, Any]]:
     parsed = _parse_snow(guild_id, "guild_id")
     assert parsed is not None
     await _require_guild(request, parsed)
     target = _parse_snow(target_id, "target_id") if target_id else None
+    needle = (q or "").strip().replace("%", "").replace("_", "")
     factory = get_session_factory()
     async with factory() as session:
         stmt = select(Case).where(Case.guild_id == parsed)
         if target is not None:
             stmt = stmt.where(Case.target_id == target)
+        if needle:
+            like = f"%{needle}%"
+            stmt = stmt.where(
+                or_(
+                    Case.reason.ilike(like),
+                    cast(Case.type, String).ilike(like),
+                    cast(Case.case_number, String).like(like),
+                    cast(Case.target_id, String).like(like),
+                    cast(Case.moderator_id, String).like(like),
+                )
+            )
         rows = list((await session.scalars(stmt.order_by(Case.case_number.desc()).limit(100))).all())
         return [
             {

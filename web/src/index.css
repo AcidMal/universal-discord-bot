@@ -1,12 +1,14 @@
 :root {
   --accent: #7c5cff;
-  --bg: #0b0c10;
-  --surface: #15171e;
+  --bg: #090a0e;
+  --surface: #12141b;
   --text: #e8eaf0;
-  --radius: 8px;
+  --radius: 12px;
   font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
   color: var(--text);
-  background: var(--bg);
+  background:
+    radial-gradient(900px 420px at 0% -10%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 60%),
+    var(--bg);
   line-height: 1.5;
 }
 
@@ -58,11 +60,29 @@ header,
 }
 
 header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   justify-content: space-between;
   gap: 1rem;
   align-items: center;
-  padding: 1.25rem 1.5rem;
+  margin: 0.75rem 1rem 0;
+  padding: 0.9rem 1.1rem;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.page-title {
+  display: block;
+  font-size: 1.15rem;
+  letter-spacing: -0.03em;
+}
+
+.who {
+  opacity: 0.75;
+  font-size: 0.9rem;
 }
 
 .header-actions,
@@ -78,9 +98,17 @@ header {
 
 .layout {
   display: grid;
-  grid-template-columns: 16rem 1fr;
+  grid-template-columns: 17.5rem minmax(0, 1fr);
   gap: 1rem;
-  padding: 0 1.5rem 2rem;
+  padding: 1rem;
+  align-items: start;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  min-width: 0;
 }
 
 aside,
@@ -94,9 +122,43 @@ textarea {
 }
 
 aside {
+  position: sticky;
+  top: 5.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.4rem;
+  padding: 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  max-height: calc(100vh - 6.5rem);
+  overflow: auto;
+}
+
+.search {
+  width: 100%;
+  background: color-mix(in srgb, var(--bg) 65%, var(--surface));
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+
+.group-label,
+.hint {
+  margin: 0.35rem 0.2rem 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+
+.hint {
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 0.85rem;
+  opacity: 0.7;
 }
 
 .nav,
@@ -117,11 +179,16 @@ textarea {
   gap: 0.5rem;
 }
 
-.nav.active,
+.nav.active {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--text);
+}
+
 .tab.active,
 .button {
   background: var(--accent);
-  color: var(--bg);
+  color: white;
   border-color: transparent;
 }
 
@@ -137,7 +204,8 @@ main .stack {
 }
 
 .card {
-  padding: 1rem 1.1rem;
+  padding: 1.05rem 1.15rem;
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .stack {
@@ -288,5 +356,10 @@ textarea {
   .layout,
   .theme-grid {
     grid-template-columns: 1fr;
+  }
+
+  aside {
+    position: static;
+    max-height: none;
   }
 }

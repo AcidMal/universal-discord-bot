@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from api.routes import router
-from api.status_routes import forget_api_node, record_api_heartbeat, router as status_router
+from api.status_routes import forget_api_node, forget_stale_nodes, record_api_heartbeat, router as status_router
 from api.twitch_routes import router as twitch_router
 from shared.db import get_engine
 from shared.settings import get_settings
@@ -23,6 +23,7 @@ async def _api_heartbeat() -> None:
     while True:
         try:
             await record_api_heartbeat(get_settings().node_id)
+            await forget_stale_nodes()
         except Exception:
             log.exception("api heartbeat failed")
         await asyncio.sleep(5)

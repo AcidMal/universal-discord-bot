@@ -47,7 +47,7 @@ export function HealthPanel() {
       <div className="card">
         <p className="eyebrow">Live status</p>
         <h2>Nodes and shards</h2>
-        <p>Public. Refreshes every 2 seconds from the nodes talking to this web server.</p>
+        <p>Public. Refreshes every 2 seconds. Nodes that stop heartbeating are removed after 60 seconds.</p>
         {error ? <p className="error">{error}</p> : null}
         {status ? (
           <div className="summary">

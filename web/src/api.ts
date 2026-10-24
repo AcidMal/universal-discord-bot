@@ -118,10 +118,12 @@ export const api = {
     request(`/api/guilds/${id}/config`, { method: "PATCH", body: JSON.stringify(body) }),
   saveTheme: (id: string, body: unknown) =>
     request<ThemePayload>(`/api/guilds/${id}/theme`, { method: "PUT", body: JSON.stringify(body) }),
-  cases: (id: string, targetId?: string) =>
-    request<Record<string, unknown>[]>(
-      `/api/guilds/${id}/cases${targetId ? `?target_id=${targetId}` : ""}`,
-    ),
+  cases: (id: string, q?: string) => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    const suffix = params.toString() ? `?${params}` : "";
+    return request<Record<string, unknown>[]>(`/api/guilds/${id}/cases${suffix}`);
+  },
   reports: (id: string) => request<Record<string, string | null>[]>(`/api/guilds/${id}/reports`),
   patchReport: (id: string, reportId: string, status: string) =>
     request(`/api/guilds/${id}/reports/${reportId}`, {

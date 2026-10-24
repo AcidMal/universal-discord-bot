@@ -16,6 +16,7 @@ router = APIRouter()
 
 PRESENCES = {"online", "idle", "dnd", "invisible"}
 ACTIVITIES = {"custom", "playing", "watching", "listening"}
+_LIVE_SECONDS = 60
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -33,8 +34,24 @@ def require_admin(request: Request) -> dict[str, Any]:
     return session_data
 
 
+async def forget_stale_nodes() -> None:
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(
+            text(
+                """
+                DELETE FROM cluster_nodes
+                WHERE last_seen < now() - (:live_seconds * interval '1 second')
+                """
+            ),
+            {"live_seconds": _LIVE_SECONDS},
+        )
+        await session.commit()
+
+
 @router.get("/api/status")
 async def cluster_status() -> dict[str, Any]:
+    await forget_stale_nodes()
     factory = get_session_factory()
     async with factory() as session:
         nodes = (
@@ -44,9 +61,11 @@ async def cluster_status() -> dict[str, Any]:
                     SELECT node_id, hostname, role, last_seen, claimed_shards,
                            EXTRACT(EPOCH FROM (now() - last_seen)) AS age_seconds
                     FROM cluster_nodes
+                    WHERE last_seen > now() - (:live_seconds * interval '1 second')
                     ORDER BY role, hostname, node_id
                     """
-                )
+                ),
+                {"live_seconds": _LIVE_SECONDS},
             )
         ).mappings().all()
         shards = (
