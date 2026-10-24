@@ -74,10 +74,64 @@ header {
   backdrop-filter: blur(16px);
 }
 
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
 .page-title {
   display: block;
   font-size: 1.15rem;
   letter-spacing: -0.03em;
+}
+
+.icon-button {
+  width: 2.4rem;
+  height: 2.4rem;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  color: var(--text);
+}
+
+.icon-button svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon-button.active {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.section-menu {
+  position: relative;
+}
+
+.menu-panel {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  left: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  width: 14rem;
+  padding: 0.45rem;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius);
+  box-shadow: 0 16px 40px color-mix(in srgb, black 35%, transparent);
 }
 
 .who {
@@ -97,21 +151,18 @@ header {
 }
 
 .layout {
-  display: grid;
-  grid-template-columns: 17.5rem minmax(0, 1fr);
-  gap: 1rem;
   padding: 1rem;
-  align-items: start;
 }
 
 main {
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
+  width: min(100%, 72rem);
+  margin: 0 auto;
   min-width: 0;
 }
 
-aside,
 .card,
 .nav,
 .tab,
@@ -119,18 +170,6 @@ input,
 select,
 textarea {
   background: var(--surface);
-}
-
-aside {
-  position: sticky;
-  top: 5.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  padding: 0.7rem;
-  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
-  max-height: calc(100vh - 6.5rem);
-  overflow: auto;
 }
 
 .search {
@@ -353,13 +392,11 @@ textarea {
 }
 
 @media (max-width: 800px) {
-  .layout,
   .theme-grid {
     grid-template-columns: 1fr;
   }
 
-  aside {
-    position: static;
-    max-height: none;
+  .who {
+    display: none;
   }
 }

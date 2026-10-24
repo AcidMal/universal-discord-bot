@@ -29,9 +29,43 @@ function EmbedPreview({ theme }: { theme: ThemePayload }) {
 type Tab = (typeof TABS)[number];
 type Route = { view: "status" | "servers" | "bot"; guildId: string; tab: Tab };
 
+function Icon({ name }: { name: "status" | "bot" | "servers" | "menu" }) {
+  if (name === "status") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 12h4l2.5-6 4.5 12L16.5 12H21" />
+      </svg>
+    );
+  }
+  if (name === "bot") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4" />
+      </svg>
+    );
+  }
+  if (name === "servers") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="3" width="7" height="7" rx="1.5" />
+        <rect x="14" y="3" width="7" height="7" rx="1.5" />
+        <rect x="3" y="14" width="7" height="7" rx="1.5" />
+        <rect x="14" y="14" width="7" height="7" rx="1.5" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </svg>
+  );
+}
+
 function readRoute(): Route {
   const parts = window.location.pathname.split("/").filter(Boolean);
   if (parts[0] === "bot") return { view: "bot", guildId: "", tab: "Overview" };
+  if (parts[0] === "servers") return { view: "servers", guildId: "", tab: "Overview" };
   if (parts[0] && /^\d{5,}$/.test(parts[0])) {
     const tab = TABS.find((item) => item.toLowerCase() === (parts[1] || "").toLowerCase()) || "Overview";
     return { view: "servers", guildId: parts[0], tab };
@@ -54,12 +88,35 @@ export default function App() {
   const [detail, setDetail] = useState<GuildDetail | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const onPop = () => setRoute(readRoute());
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [route.view, route.guildId, route.tab]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointer(event: MouseEvent) {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".section-menu")) return;
+      setMenuOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
   useEffect(() => {
     api
@@ -89,7 +146,7 @@ export default function App() {
       .catch((err: Error) => setError(err.message));
   }, [route.guildId, username]);
 
-  const showServers = Boolean(username && route.view === "servers" && route.guildId);
+  const showServer = Boolean(username && route.guildId);
   const query = serverQuery.trim().toLowerCase();
   const visibleGuilds = guilds.filter(
     (guild) => !query || guild.name.toLowerCase().includes(query) || guild.id.includes(query),
@@ -100,17 +157,79 @@ export default function App() {
   ]
     .map((group) => ({ ...group, guilds: visibleGuilds.filter((guild) => guild.access === group.access) }))
     .filter((group) => group.guilds.length > 0);
-  const title =
-    route.view === "status" ? "Live status" : route.view === "bot" ? "Bot settings" : detail?.name || "Server";
+  const title = showServer
+    ? detail?.name || "Server"
+    : route.view === "bot"
+      ? "Bot settings"
+      : route.view === "servers"
+        ? "Servers"
+        : "Live status";
+  const eyebrow = showServer ? route.tab : route.view === "bot" ? "Admin" : route.view === "servers" ? "Directory" : "Public";
 
   return (
     <div className="shell">
       <header>
-        <div>
-          <p className="eyebrow">Moderation</p>
-          <strong className="page-title">{title}</strong>
+        <div className="header-title">
+          {showServer ? (
+            <div className="section-menu">
+              <button
+                className={menuOpen ? "icon-button active" : "icon-button"}
+                aria-label="Server sections"
+                aria-expanded={menuOpen}
+                onClick={() => setMenuOpen((open) => !open)}
+              >
+                <Icon name="menu" />
+              </button>
+              {menuOpen ? (
+                <div className="menu-panel" role="menu">
+                  {TABS.map((item) => (
+                    <button
+                      key={item}
+                      className={item === route.tab ? "nav active" : "nav"}
+                      role="menuitem"
+                      onClick={() => go(item === "Overview" ? `/${route.guildId}` : `/${route.guildId}/${item.toLowerCase()}`)}
+                    >
+                      <span>{item}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <div>
+            <p className="eyebrow">{eyebrow}</p>
+            <strong className="page-title">{title}</strong>
+          </div>
         </div>
         <div className="header-actions">
+          <button
+            className={route.view === "status" ? "icon-button active" : "icon-button"}
+            aria-label="Status"
+            title="Status"
+            onClick={() => go("/")}
+          >
+            <Icon name="status" />
+          </button>
+          {username ? (
+            <button
+              className={route.view === "servers" && !route.guildId ? "icon-button active" : "icon-button"}
+              aria-label="Servers"
+              title="Servers"
+              onClick={() => go("/servers")}
+            >
+              <Icon name="servers" />
+            </button>
+          ) : null}
+          {isAdmin ? (
+            <button
+              className={route.view === "bot" ? "icon-button active" : "icon-button"}
+              aria-label="Bot admin"
+              title="Bot admin"
+              onClick={() => go("/bot")}
+            >
+              <Icon name="bot" />
+            </button>
+          ) : null}
           {username ? (
             <>
               <span className="who">{username}</span>
@@ -126,19 +245,16 @@ export default function App() {
         </div>
       </header>
       <div className="layout">
-        <aside>
-          <button className={route.view === "status" ? "nav active" : "nav"} onClick={() => go("/")}>
-            <span>Status</span>
-            <small>public</small>
-          </button>
-          {isAdmin ? (
-            <button className={route.view === "bot" ? "nav active" : "nav"} onClick={() => go("/bot")}>
-              <span>Bot</span>
-              <small>admin</small>
-            </button>
+        <main>
+          {error ? <p className="error">{error}</p> : null}
+          {notice ? <p className="notice">{notice}</p> : null}
+          {route.view === "status" ? <HealthPanel /> : null}
+          {route.view === "bot" && isAdmin ? <BotSettingsPanel onSaved={setNotice} /> : null}
+          {route.view === "servers" && !route.guildId && !username ? (
+            <p className="card">Sign in to see your servers.</p>
           ) : null}
-          {username ? (
-            <>
+          {username && route.view === "servers" && !route.guildId ? (
+            <section className="stack">
               <input
                 className="search"
                 placeholder="Search servers"
@@ -151,43 +267,18 @@ export default function App() {
                 <div className="group" key={group.access}>
                   <p className="group-label">{group.label}</p>
                   {group.guilds.map((guild) => (
-                    <button
-                      key={guild.id}
-                      className={showServers && guild.id === route.guildId ? "nav active" : "nav"}
-                      onClick={() => go(`/${guild.id}`)}
-                    >
+                    <button key={guild.id} className="nav" onClick={() => go(`/${guild.id}`)}>
                       <span>{guild.name}</span>
                       <small>{guild.access}</small>
                     </button>
                   ))}
                 </div>
               ))}
-            </>
-          ) : (
-            <p className="hint">Sign in with Discord to edit server settings.</p>
-          )}
-        </aside>
-        <main>
-          {error ? <p className="error">{error}</p> : null}
-          {notice ? <p className="notice">{notice}</p> : null}
-          {route.view === "status" ? <HealthPanel /> : null}
-          {route.view === "bot" && isAdmin ? <BotSettingsPanel onSaved={setNotice} /> : null}
-          {route.view === "servers" && !username ? (
-            <p className="card">Sign in to open this server.</p>
+            </section>
           ) : null}
-          {showServers ? (
+          {route.guildId && !username ? <p className="card">Sign in to open this server.</p> : null}
+          {showServer ? (
             <>
-          <nav className="tabs">
-            {TABS.map((item) => (
-              <button
-                key={item}
-                className={item === route.tab ? "tab active" : "tab"}
-                onClick={() => go(item === "Overview" ? `/${route.guildId}` : `/${route.guildId}/${item.toLowerCase()}`)}
-              >
-                {item}
-              </button>
-            ))}
-          </nav>
           {detail && route.tab === "Overview" ? (
             <Overview
               key={detail.id}
