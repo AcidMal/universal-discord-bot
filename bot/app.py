@@ -17,7 +17,7 @@ EXTENSIONS = (
 )
 
 
-class ModBot(commands.Bot):
+class ModBot(commands.AutoShardedBot):
     cluster_node_id: str = ""
 
     def __init__(self, *, shard_ids: list[int], shard_count: int) -> None:

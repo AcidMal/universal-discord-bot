@@ -16,7 +16,22 @@ from shared.services import ensure_guild, mark_guild_left
 log = logging.getLogger("bot.core")
 
 
-def _shard_snapshot(shard: discord.Shard) -> tuple[str, int | None]:
+def _held_shard_ids(bot: commands.Bot) -> list[int]:
+    shard_ids = getattr(bot, "shard_ids", None)
+    if shard_ids:
+        return [int(shard_id) for shard_id in shard_ids]
+    shard_id = getattr(bot, "shard_id", None)
+    return [0 if shard_id is None else int(shard_id)]
+
+
+def _connected_shards(bot: commands.Bot) -> list[tuple[int, object]]:
+    shards = getattr(bot, "shards", None)
+    if shards:
+        return list(shards.items())
+    return [(_held_shard_ids(bot)[0], bot)]
+
+
+def _shard_snapshot(shard: object) -> tuple[str, int | None]:
     is_closed = getattr(shard, "is_closed", None)
     if callable(is_closed) and is_closed():
         return "disconnected", None
@@ -46,7 +61,7 @@ class Core(commands.Cog):
 
     @tasks.loop(seconds=5)
     async def gateway_report(self) -> None:
-        for shard_id, shard in self.bot.shards.items():
+        for shard_id, shard in _connected_shards(self.bot):
             status, latency_ms = _shard_snapshot(shard)
             await self._report(shard_id, status, latency_ms)
 
@@ -76,7 +91,7 @@ class Core(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
-        log.info("gateway ready as %s shards=%s", self.bot.user, self.bot.shard_ids)
+        log.info("gateway ready as %s shards=%s", self.bot.user, _held_shard_ids(self.bot))
         await apply_saved()
         factory = get_session_factory()
         async with factory() as session:
