@@ -137,27 +137,63 @@ async def ensure_eventsub(broadcaster_id: str) -> str | None:
         except TwitchError as exc:
             message = str(exc)
             if "409" in message:
+                await _remember_existing_subscription(broadcaster_id, event_type)
                 continue
             log.warning("eventsub %s for %s failed: %s", event_type, broadcaster_id, exc)
             return f"Saved the alert. Twitch push failed ({exc}). Checking every 10 seconds."
         data = list((payload or {}).get("data") or [])
-        subscription_id = str(data[0]["id"]) if data else ""
-        status = str(data[0].get("status") or "pending") if data else "pending"
-        factory = get_session_factory()
-        async with factory() as session:
-            stmt = pg_insert(TwitchSubscription).values(
-                broadcaster_id=broadcaster_id,
-                event_type=event_type,
-                subscription_id=subscription_id,
-                status=status,
+        if data:
+            await _save_subscription(
+                broadcaster_id,
+                event_type,
+                str(data[0]["id"]),
+                str(data[0].get("status") or "pending"),
             )
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["broadcaster_id", "event_type"],
-                set_={"subscription_id": stmt.excluded.subscription_id, "status": stmt.excluded.status},
-            )
-            await session.execute(stmt)
-            await session.commit()
     return None
+
+
+async def _save_subscription(broadcaster_id: str, event_type: str, subscription_id: str, status: str) -> None:
+    factory = get_session_factory()
+    async with factory() as session:
+        stmt = pg_insert(TwitchSubscription).values(
+            broadcaster_id=broadcaster_id,
+            event_type=event_type,
+            subscription_id=subscription_id,
+            status=status[:64],
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["broadcaster_id", "event_type"],
+            set_={"subscription_id": stmt.excluded.subscription_id, "status": stmt.excluded.status},
+        )
+        await session.execute(stmt)
+        await session.commit()
+
+
+async def _remember_existing_subscription(broadcaster_id: str, event_type: str) -> None:
+    cursor: str | None = None
+    for _ in range(5):
+        params: dict[str, str] = {"type": event_type}
+        if cursor:
+            params["after"] = cursor
+        try:
+            payload = await _helix("GET", "/eventsub/subscriptions", params=params)
+        except TwitchError:
+            log.warning("could not list EventSub %s for %s", event_type, broadcaster_id)
+            return
+        for row in (payload or {}).get("data") or []:
+            condition = row.get("condition") or {}
+            if str(condition.get("broadcaster_user_id") or "") != broadcaster_id:
+                continue
+            await _save_subscription(
+                broadcaster_id,
+                event_type,
+                str(row.get("id") or ""),
+                str(row.get("status") or "pending"),
+            )
+            return
+        cursor = str(((payload or {}).get("pagination") or {}).get("cursor") or "")
+        if not cursor:
+            return
 
 
 async def delete_eventsub(broadcaster_id: str) -> None:

@@ -464,7 +464,7 @@ class TwitchSubscription(Base):
     broadcaster_id: Mapped[str] = mapped_column(String(32), nullable=False)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
     subscription_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="pending")
 
 
 class ProcessedEvent(Base):
