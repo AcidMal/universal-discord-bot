@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import secrets
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -32,6 +33,9 @@ from shared.theme import EMBED_TEMPLATE_KEYS, PRESETS, render_css_tokens, render
 router = APIRouter()
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 PLACEHOLDERS = {"{case}", "{type}", "{target}", "{reason}", "{moderator}"}
+_GUILD_CACHE_SECONDS = 20.0
+_guild_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_guild_locks: dict[str, asyncio.Lock] = {}
 
 
 def _snow(value: int | None) -> str | None:
@@ -73,6 +77,19 @@ async def _member_role_ids(guild_id: int, user_id: str, token: str) -> set[int]:
 
 
 async def _accessible_guilds(session_data: dict) -> list[dict[str, Any]]:
+    user_id = str(session_data["user_id"])
+    lock = _guild_locks.setdefault(user_id, asyncio.Lock())
+    async with lock:
+        cached = _guild_cache.get(user_id)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < _GUILD_CACHE_SECONDS:
+            return cached[1]
+        visible = await _load_accessible_guilds(session_data)
+        _guild_cache[user_id] = (time.monotonic(), visible)
+        return visible
+
+
+async def _load_accessible_guilds(session_data: dict) -> list[dict[str, Any]]:
     settings = get_settings()
     oauth_guilds = await discord_request("GET", "/users/@me/guilds", token=session_data["access_token"])
     if oauth_guilds is None:

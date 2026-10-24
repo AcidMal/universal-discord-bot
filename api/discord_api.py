@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 import httpx
 from fastapi import HTTPException
+
+log = logging.getLogger("api.discord")
 
 API = "https://discord.com/api/v10"
 MANAGE_GUILD = 1 << 5
@@ -31,18 +35,29 @@ async def discord_request(
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(method, f"{API}{path}", headers=headers, **kwargs)
+            if response.status_code == 429:
+                try:
+                    delay = min(float(response.headers.get("retry-after", "1")), 2.0)
+                except ValueError:
+                    delay = 1.0
+                await asyncio.sleep(delay)
+                response = await client.request(method, f"{API}{path}", headers=headers, **kwargs)
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail="Discord could not be reached") from exc
+        log.warning("discord unreachable on %s %s", method, path)
+        raise HTTPException(status_code=424, detail="Discord could not be reached") from exc
     if response.status_code in {401, 404}:
         return None
+    if response.status_code == 429:
+        raise HTTPException(status_code=429, detail="Discord is busy. Refresh in a moment.")
     if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail="Discord rejected the request")
+        log.warning("discord %s on %s %s", response.status_code, method, path)
+        raise HTTPException(status_code=424, detail="Discord rejected the request")
     if not response.content:
         return None
     try:
         return response.json()
     except ValueError as exc:
-        raise HTTPException(status_code=502, detail="Discord sent a response that was not JSON") from exc
+        raise HTTPException(status_code=424, detail="Discord sent a response that was not JSON") from exc
 
 
 def can_manage(permissions: int) -> bool:
