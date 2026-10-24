@@ -18,6 +18,7 @@ async def discord_request(
     bot: bool = False,
     data: dict | None = None,
     form: dict | None = None,
+    timeout: float = 10,
 ) -> Any:
     headers: dict[str, str] = {}
     if token:
@@ -28,7 +29,7 @@ async def discord_request(
     if form is not None:
         kwargs["data"] = form
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(method, f"{API}{path}", headers=headers, **kwargs)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Discord could not be reached") from exc

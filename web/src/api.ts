@@ -52,8 +52,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       body = JSON.parse(text);
     } catch {
-      const plain = text.replace(/\s+/g, " ").trim().slice(0, 200);
-      throw new Error(plain || response.statusText || "Request failed");
+      const plain = text.replace(/\s+/g, " ").trim();
+      if (plain.startsWith("<!") || plain.startsWith("<html") || plain.includes("cf-error-details")) {
+        throw new Error("Cloudflare returned an error page instead of the server list.");
+      }
+      throw new Error(plain.slice(0, 200) || response.statusText || "Request failed");
     }
   }
   if (response.status === 401) {

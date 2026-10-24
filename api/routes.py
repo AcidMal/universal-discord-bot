@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import secrets
 import uuid
@@ -55,6 +56,22 @@ def _check_hex(value: str, field: str) -> str:
     return value
 
 
+async def _member_role_ids(guild_id: int, user_id: str, token: str) -> set[int]:
+    try:
+        member = await discord_request(
+            "GET",
+            f"/guilds/{guild_id}/members/{user_id}",
+            token=token,
+            bot=True,
+            timeout=5,
+        )
+    except HTTPException:
+        return set()
+    if not member:
+        return set()
+    return {int(role_id) for role_id in member.get("roles") or []}
+
+
 async def _accessible_guilds(session_data: dict) -> list[dict[str, Any]]:
     settings = get_settings()
     oauth_guilds = await discord_request("GET", "/users/@me/guilds", token=session_data["access_token"])
@@ -64,43 +81,41 @@ async def _accessible_guilds(session_data: dict) -> list[dict[str, Any]]:
     async with factory() as session:
         rows = list((await session.scalars(select(Guild).where(Guild.left_at.is_(None)))).all())
         known = {row.id: row.name for row in rows}
+        staff_rows: list[StaffRole] = []
+        if known:
+            staff_rows = list(
+                (await session.scalars(select(StaffRole).where(StaffRole.guild_id.in_(list(known))))).all()
+            )
+    staff_by_guild: dict[int, set[int]] = {}
+    for row in staff_rows:
+        staff_by_guild.setdefault(row.guild_id, set()).add(row.role_id)
+
     visible: list[dict[str, Any]] = []
+    pending: list[int] = []
     user_id = str(session_data["user_id"])
     for guild in oauth_guilds:
         guild_id = int(guild["id"])
         if guild_id not in known:
             continue
         permissions = int(guild.get("permissions") or 0)
-        access = "manager" if guild.get("owner") or can_manage(permissions) else None
-        if access is None and settings.discord_token:
-            try:
-                member = await discord_request(
-                    "GET",
-                    f"/guilds/{guild_id}/members/{user_id}",
-                    token=settings.discord_token,
-                    bot=True,
-                )
-            except HTTPException:
-                member = None
-            if member:
-                role_ids = {int(role_id) for role_id in member.get("roles") or []}
-                async with factory() as session:
-                    staff = list(
-                        (
-                            await session.scalars(select(StaffRole).where(StaffRole.guild_id == guild_id))
-                        ).all()
-                    )
-                    if any(row.role_id in role_ids for row in staff):
-                        access = "staff"
-        if access is None:
+        if guild.get("owner") or can_manage(permissions):
+            visible.append({"id": str(guild_id), "name": known[guild_id], "access": "manager"})
             continue
-        visible.append(
-            {
-                "id": str(guild_id),
-                "name": known[guild_id],
-                "access": access,
-            }
-        )
+        if staff_by_guild.get(guild_id) and settings.discord_token:
+            pending.append(guild_id)
+
+    if not pending:
+        return visible
+
+    semaphore = asyncio.Semaphore(4)
+
+    async def lookup(guild_id: int) -> tuple[int, set[int]]:
+        async with semaphore:
+            return guild_id, await _member_role_ids(guild_id, user_id, settings.discord_token)
+
+    for guild_id, role_ids in await asyncio.gather(*(lookup(guild_id) for guild_id in pending)):
+        if role_ids & staff_by_guild.get(guild_id, set()):
+            visible.append({"id": str(guild_id), "name": known[guild_id], "access": "staff"})
     return visible
 
 
