@@ -5,6 +5,7 @@ from discord.ext import commands
 
 EXTENSIONS = (
     "bot.cogs.core",
+    "bot.cogs.ping",
     "bot.cogs.setup",
     "bot.cogs.cases",
     "bot.cogs.notes",

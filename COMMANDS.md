@@ -19,10 +19,25 @@ Discord administrators can run every command. Everyone else needs the native per
 | `/ban`, `/unban` | Ban Members | Ban |
 | `/lockdown` | Manage Channels or Manage Server | Ban |
 | `/report` | Any member | — |
+| `/ping` | Any member | — |
 
 The bot also refuses a punishment when the target is above the moderator or above the bot's highest role.
 
 Modules can be turned off in the dashboard. A disabled module rejects its commands.
+
+## Ping
+
+### `/ping`
+
+Any member can run this. It checks the shared database, then lists every cluster node and the shards that node holds.
+
+| Line | Meaning |
+| --- | --- |
+| Database | Round trip from this bot process to Postgres |
+| Node | Role (`gateway` or `api`), whether its heartbeat is online, and how long ago it was seen |
+| Shard | Gateway state and websocket latency. A shard this process holds is measured live |
+
+A node is online when its heartbeat is under 20 seconds old, stale under 60 seconds, and offline after that.
 
 ## Setup
 
