@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,6 +26,26 @@ def _iso(value: datetime | None) -> str | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.isoformat()
+
+
+def _role_name(role: str) -> str:
+    if role == "api":
+        return "API"
+    if role == "gateway":
+        return "Bot"
+    return role.replace("_", " ").title() or "Node"
+
+
+def _label_nodes(nodes: list[dict[str, Any]]) -> None:
+    counts: dict[str, int] = {}
+    for node in nodes:
+        counts[node["role"]] = counts.get(node["role"], 0) + 1
+    seen: dict[str, int] = {}
+    for node in nodes:
+        role = str(node["role"])
+        seen[role] = seen.get(role, 0) + 1
+        title = _role_name(role)
+        node["label"] = title if counts[role] == 1 else f"{title} {seen[role]}"
 
 
 def require_admin(request: Request) -> dict[str, Any]:
@@ -54,6 +75,9 @@ async def cluster_status() -> dict[str, Any]:
     await forget_stale_nodes()
     factory = get_session_factory()
     async with factory() as session:
+        started = time.perf_counter()
+        await session.execute(text("SELECT 1"))
+        database_ms = max(0, int((time.perf_counter() - started) * 1000))
         nodes = (
             await session.execute(
                 text(
@@ -124,6 +148,7 @@ async def cluster_status() -> dict[str, Any]:
                 "shards": grouped.get(node_id, []),
             }
         )
+    _label_nodes(payload_nodes)
 
     unassigned = grouped.get("", [])
     return {
@@ -133,6 +158,7 @@ async def cluster_status() -> dict[str, Any]:
             "shards_ready": ready,
             "shards_total": len(shards),
         },
+        "database": {"status": "online", "latency_ms": database_ms},
         "nodes": payload_nodes,
         "unassigned_shards": unassigned,
     }

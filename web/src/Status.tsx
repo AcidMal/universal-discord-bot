@@ -5,6 +5,14 @@ function Pill({ status }: { status: string }) {
   return <span className={`pill ${status}`}>{status}</span>;
 }
 
+function displayName(node: { node_id: string; role: string; label?: string }, nodes: { node_id: string; role: string; label?: string }[]) {
+  if (node.label) return node.label;
+  const same = nodes.filter((item) => item.role === node.role);
+  const title = node.role === "api" ? "API" : node.role === "gateway" ? "Bot" : node.role;
+  if (same.length < 2) return title;
+  return `${title} ${same.findIndex((item) => item.node_id === node.node_id) + 1}`;
+}
+
 function ShardRow({ shard }: { shard: ShardStatus }) {
   return (
     <li>
@@ -62,14 +70,25 @@ export function HealthPanel() {
           <p>Waiting for the first reading.</p>
         )}
       </div>
+      {status?.database ? (
+        <article className="card">
+          <header className="split">
+            <div>
+              <strong>Database</strong>
+              <p>
+                {status.database.latency_ms === null ? "No reply" : `${status.database.latency_ms} ms`}
+              </p>
+            </div>
+            <Pill status={status.database.status} />
+          </header>
+        </article>
+      ) : null}
       {status?.nodes.map((node) => (
         <article className="card" key={node.node_id}>
           <header className="split">
             <div>
-              <strong>{node.hostname}</strong>
-              <p>
-                {node.role} · {node.node_id.slice(0, 8)} · seen {node.age_seconds}s ago
-              </p>
+              <strong>{displayName(node, status.nodes)}</strong>
+              <p>Seen {node.age_seconds}s ago</p>
             </div>
             <Pill status={node.status} />
           </header>

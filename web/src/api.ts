@@ -84,6 +84,7 @@ export type NodeStatus = {
   node_id: string;
   hostname: string;
   role: string;
+  label?: string;
   status: string;
   age_seconds: number;
   shards: ShardStatus[];
@@ -95,6 +96,10 @@ export type ClusterStatus = {
     nodes_total: number;
     shards_ready: number;
     shards_total: number;
+  };
+  database?: {
+    status: string;
+    latency_ms: number | null;
   };
   nodes: NodeStatus[];
   unassigned_shards: ShardStatus[];
