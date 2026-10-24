@@ -59,7 +59,7 @@ OAuth2 redirect to add under OAuth2 → Redirects:
 http://localhost:5173/auth/callback
 ```
 
-Use your real public URL in production, with no trailing slash. It must match `PUBLIC_URL`.
+Use your real public URL in production, with no trailing slash. It must match `PUBLIC_URL`. [CLOUDFLARE.md](CLOUDFLARE.md) is the setup for that hostname on Cloudflare, for Compose, Kubernetes, and a host install.
 
 Invite URL permissions cover kick, ban, timeout, manage channels, manage roles, view/send/manage messages, embed links, and read history:
 
@@ -317,6 +317,7 @@ The scheduler is safe to run on every connected node. `scheduled_actions` rows a
 | `deploy-k8s.sh`, `deploy-k8s.ps1` | One-command Kubernetes deploy |
 | `deploy/kubernetes/` | Kubernetes manifests used by that script |
 | `COMMANDS.md` | Slash command reference |
+| `CLOUDFLARE.md` | Public website setup through Cloudflare |
 
 ## Tests
 
