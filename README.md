@@ -174,7 +174,7 @@ kubectl logs -n universal-discord-bot -l app=api -f
 kubectl logs -n universal-discord-bot -l app=bot -f
 ```
 
-`api` and `bot` should become `Running`. The API log ends after migrations. The bot log shows the shards it claimed.
+`api` and `bot` should become `Running`. The API log ends after migrations. The bot log shows the shards it claimed. A `401` while pulling means the pod has no registry credentials. Run `./deploy-k8s.sh` again so it refreshes the `ghcr` pull secret, then delete the pod so Kubernetes retries the pull.
 
 Run `./deploy-k8s.sh` again after you change `.env` or `cluster.env`. Add `--replicas 2` only after Discord assigns more than one shard. Add `--no-build` to skip rebuilding images.
 

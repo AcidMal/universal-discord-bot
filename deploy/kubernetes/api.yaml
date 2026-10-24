@@ -26,14 +26,14 @@ spec:
       labels:
         app: api
     spec:
-      containers:
-        - name: api
+      imagePullSecrets:
+        - name: ghcr
+      initContainers:
+        - name: migrate
           image: ghcr.io/acidmal/universal-discord-bot-api:latest
           imagePullPolicy: IfNotPresent
-          ports:
-            - name: http
-              containerPort: 8000
-          env:
+          command: ["./docker/entrypoint-api.sh", "migrate"]
+          env: &api-env
             - name: NODE_ID
               valueFrom:
                 fieldRef:
@@ -93,6 +93,15 @@ spec:
                 configMapKeyRef:
                   name: bot-config
                   key: TWITCH_CLIENT_ID
+      containers:
+        - name: api
+          image: ghcr.io/acidmal/universal-discord-bot-api:latest
+          imagePullPolicy: IfNotPresent
+          command: ["./docker/entrypoint-api.sh", "serve"]
+          ports:
+            - name: http
+              containerPort: 8000
+          env: *api-env
           startupProbe:
             httpGet:
               path: /health

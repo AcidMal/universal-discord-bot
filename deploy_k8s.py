@@ -327,10 +327,12 @@ def usable_token(token: str) -> bool:
     return value.startswith(("ghp_", "github_pat_")) and " " not in value and "/" not in value
 
 
-def apply_workloads(*, external_db: bool) -> None:
+def apply_workloads(*, external_db: bool, remote: bool) -> None:
     names = ["namespace.yaml", "api.yaml", "bot.yaml", "web.yaml", "ingress.yaml"]
     if not external_db:
         names.insert(1, "postgres.yaml")
+    if remote:
+        names.append("serviceaccount.yaml")
     folder = ROOT / "deploy" / "kubernetes"
     for name in names:
         kubectl("apply", "-f", str(folder / name))
@@ -359,6 +361,8 @@ def patch_remote_pull() -> None:
             "imagePullSecrets": [{"name": "ghcr"}],
             "containers": [{"name": name, "imagePullPolicy": "Always"}],
         }
+        if name == "api":
+            spec["initContainers"] = [{"name": "migrate", "imagePullPolicy": "Always"}]
         if name == "bot":
             spec["initContainers"] = [{"name": "wait-for-api", "imagePullPolicy": "Always"}]
         kubectl(
@@ -370,6 +374,23 @@ def patch_remote_pull() -> None:
             "--type=strategic",
             f"-p={json.dumps({'spec': {'template': {'spec': spec}}})}",
         )
+        attached = kubectl(
+            "get",
+            "deployment",
+            name,
+            "-n",
+            NAMESPACE,
+            "-o",
+            "jsonpath={.spec.template.spec.imagePullSecrets[0].name}",
+        )
+        if attached != "ghcr":
+            raise SystemExit(f"Deployment {name} is still pulling anonymously.")
+
+
+def clear_pull_secret() -> None:
+    remove = '[{"op":"remove","path":"/spec/template/spec/imagePullSecrets"}]'
+    for name in ("api", "bot", "web"):
+        kubectl("patch", "deployment", name, "-n", NAMESPACE, "--type=json", f"-p={remove}")
 
 
 def ensure_buildx() -> None:
@@ -533,10 +554,12 @@ def main() -> None:
         print(f"Using Ingress class {chosen_ingress}")
     else:
         print("No Ingress class found. The dashboard Service is still created.")
-    apply_workloads(external_db=bool(cluster.get("DATABASE_URL")))
+    apply_workloads(external_db=bool(cluster.get("DATABASE_URL")), remote=remote)
     patch_ingress(host, chosen_ingress)
     if remote:
         patch_remote_pull()
+    else:
+        clear_pull_secret()
     kubectl("scale", "deployment/bot", "-n", NAMESPACE, f"--replicas={args.replicas}")
     if not cluster.get("DATABASE_URL"):
         rollout("postgres", "statefulset")
