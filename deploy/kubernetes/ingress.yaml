@@ -5,12 +5,12 @@ metadata:
   namespace: universal-discord-bot
 spec:
   ingressClassName: nginx
-  # tls:
-  #   - hosts:
-  #       - bot.example.com
-  #     secretName: bot-tls
+  tls:
+    - hosts:
+        - bot.pangeprime.app
+      secretName: bot-tls
   rules:
-    - host: bot.example.com
+    - host: bot.pangeprime.app
       http:
         paths:
           - path: /api
